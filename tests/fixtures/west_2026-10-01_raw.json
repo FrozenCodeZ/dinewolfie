@@ -1,0 +1,1683 @@
+{
+ "yogurt-fruit-bar": {
+  "date": "2026-10-01",
+  "menu_items": [
+   {
+    "date": null,
+    "position": 0,
+    "is_section_title": true,
+    "is_station_header": true,
+    "text": "Morning Fruit and Yogurt Bar",
+    "menu_id": 308429,
+    "station_id": 77965,
+    "food": null
+   },
+   {
+    "date": null,
+    "position": 1,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308429,
+    "station_id": 77965,
+    "food": {
+     "id": 626857,
+     "name": "Cantaloupe",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 15.0,
+      "g_fat": 0.0,
+      "g_saturated_fat": 0.0,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 4.0,
+      "g_added_sugar": null,
+      "g_sugar": 3.0,
+      "mg_potassium": 120.0,
+      "mg_sodium": 5.0,
+      "g_fiber": 0.0,
+      "g_protein": 0.0,
+      "mg_iron": 0.1,
+      "mg_calcium": 0.0,
+      "mg_vitamin_c": 16.0,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "0.25",
+      "serving_size_unit": "cups"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       },
+       {
+        "type": 2,
+        "name": "Vegan",
+        "slug": "vegan",
+        "synced_name": "Vegan"
+       }
+      ]
+     },
+     "ingredients": "Cantaloupe"
+    }
+   },
+   {
+    "date": null,
+    "position": 2,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308429,
+    "station_id": 77965,
+    "food": {
+     "id": 632940,
+     "name": "Pineapple",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 20.0,
+      "g_fat": 0.0,
+      "g_saturated_fat": 0.0,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 5.0,
+      "g_added_sugar": null,
+      "g_sugar": 4.0,
+      "mg_potassium": 45.0,
+      "mg_sodium": 0.0,
+      "g_fiber": 1.0,
+      "g_protein": 0.0,
+      "mg_iron": 0.1,
+      "mg_calcium": 10.0,
+      "mg_vitamin_c": 19.0,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "0.25",
+      "serving_size_unit": "cups"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       },
+       {
+        "type": 2,
+        "name": "Vegan",
+        "slug": "vegan",
+        "synced_name": "Vegan"
+       }
+      ]
+     },
+     "ingredients": "Pineapple"
+    }
+   },
+   {
+    "date": null,
+    "position": 3,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308429,
+    "station_id": 77965,
+    "food": {
+     "id": 626840,
+     "name": "Honeydew",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 15.0,
+      "g_fat": 0.0,
+      "g_saturated_fat": 0.0,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 4.0,
+      "g_added_sugar": null,
+      "g_sugar": 3.0,
+      "mg_potassium": 95.0,
+      "mg_sodium": 5.0,
+      "g_fiber": 0.0,
+      "g_protein": 0.0,
+      "mg_iron": 0.1,
+      "mg_calcium": 0.0,
+      "mg_vitamin_c": 7.0,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "0.25",
+      "serving_size_unit": "cups"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       },
+       {
+        "type": 2,
+        "name": "Vegan",
+        "slug": "vegan",
+        "synced_name": "Vegan"
+       }
+      ]
+     },
+     "ingredients": "Honeydew Melon"
+    }
+   },
+   {
+    "date": null,
+    "position": 4,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308429,
+    "station_id": 77965,
+    "food": {
+     "id": 642572,
+     "name": "Nature Valley Oats 'n Honey Granola",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 30.0,
+      "g_fat": 1.0,
+      "g_saturated_fat": 0.0,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 4.0,
+      "g_added_sugar": null,
+      "g_sugar": 2.0,
+      "mg_potassium": 15.0,
+      "mg_sodium": 25.0,
+      "g_fiber": 0.0,
+      "g_protein": 1.0,
+      "mg_iron": 0.1,
+      "mg_calcium": 0.0,
+      "mg_vitamin_c": 0.0,
+      "iu_vitamin_a": 0.0,
+      "re_vitamin_a": 0.0,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "1",
+      "serving_size_unit": "tbsp"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Soy",
+        "slug": "soy",
+        "synced_name": "Soy"
+       },
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       }
+      ]
+     },
+     "ingredients": "Granola (Whole Grain Oats, Sugar, Canola and/or Sunflower Oil, Rice Flour, Honey, Brown Sugar Syrup, Salt, Baking Soda, Soy Lecithin, Natural Flavor. Contains soy. Manufacturer does not claim gluten free.)"
+    }
+   },
+   {
+    "date": null,
+    "position": 5,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308429,
+    "station_id": 77965,
+    "food": {
+     "id": 637710,
+     "name": "Low Fat Strawberry Yogurt",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 110.0,
+      "g_fat": 0.5,
+      "g_saturated_fat": 0.0,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 4.0,
+      "g_carbs": 22.0,
+      "g_added_sugar": null,
+      "g_sugar": 15.0,
+      "mg_potassium": 180.0,
+      "mg_sodium": 55.0,
+      "g_fiber": 0.0,
+      "g_protein": 4.0,
+      "mg_iron": 0.0,
+      "mg_calcium": 130.0,
+      "mg_vitamin_c": null,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": 8.9,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 85.1,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "0.5",
+      "serving_size_unit": "cups"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Milk",
+        "slug": "milk",
+        "synced_name": "Milk"
+       },
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       }
+      ]
+     },
+     "ingredients": "Low Fat Strawberry Yogurt^"
+    }
+   },
+   {
+    "date": null,
+    "position": 6,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308429,
+    "station_id": 77965,
+    "food": {
+     "id": 2426771,
+     "name": "Chocolate Strawberry Overnight Oats",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 460.0,
+      "g_fat": 15.0,
+      "g_saturated_fat": 2.0,
+      "g_trans_fat": null,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 66.0,
+      "g_added_sugar": null,
+      "g_sugar": null,
+      "mg_potassium": 670.0,
+      "mg_sodium": 95.0,
+      "g_fiber": 17.0,
+      "g_protein": 18.0,
+      "mg_iron": 5.7,
+      "mg_calcium": 520.0,
+      "mg_vitamin_c": null,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": null,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "1",
+      "serving_size_unit": "serving"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Wheat",
+        "slug": "wheat",
+        "synced_name": "Wheat"
+       },
+       {
+        "type": 1,
+        "name": "Soy",
+        "slug": "soy",
+        "synced_name": "Soy"
+       },
+       {
+        "type": 2,
+        "name": "Eat Well",
+        "slug": "eat-well",
+        "synced_name": "Eat Well"
+       },
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       },
+       {
+        "type": 1,
+        "name": "Contains Gluten",
+        "slug": "contains-gluten",
+        "synced_name": "Gluten"
+       },
+       {
+        "type": 1,
+        "name": "Climate Friendly",
+        "slug": "climate-friendly",
+        "synced_name": "Low Emissions"
+       }
+      ]
+     },
+     "ingredients": "Soy Milk^, Oatmeal, Strawberries, Chia Seeds, Honey, Baking Cocoa"
+    }
+   }
+  ]
+ },
+ "dine-in-grill": {
+  "date": "2026-10-01",
+  "menu_items": [
+   {
+    "date": null,
+    "position": 0,
+    "is_section_title": true,
+    "is_station_header": true,
+    "text": "Halal Grill Options",
+    "menu_id": 308449,
+    "station_id": 65400,
+    "food": null
+   },
+   {
+    "date": null,
+    "position": 1,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308449,
+    "station_id": 65400,
+    "food": {
+     "id": 2409673,
+     "name": "Halal Grilled Chicken",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 140.0,
+      "g_fat": 6.0,
+      "g_saturated_fat": 1.0,
+      "g_trans_fat": null,
+      "mg_cholesterol": 70.0,
+      "g_carbs": 0.0,
+      "g_added_sugar": null,
+      "g_sugar": 0.0,
+      "mg_potassium": 340.0,
+      "mg_sodium": 410.0,
+      "g_fiber": 0.0,
+      "g_protein": 22.0,
+      "mg_iron": 0.6,
+      "mg_calcium": 10.0,
+      "mg_vitamin_c": 1.0,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "4",
+      "serving_size_unit": "oz portion"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 2,
+        "name": "Eat Well",
+        "slug": "eat-well",
+        "synced_name": "Eat Well"
+       }
+      ]
+     },
+     "ingredients": "Chicken Breast^, Extra Virgin Olive Oil, Cilantro, Kosher Salt^, Black Pepper"
+    }
+   },
+   {
+    "date": null,
+    "position": 0,
+    "is_section_title": true,
+    "is_station_header": true,
+    "text": "Grill Dinner Specials",
+    "menu_id": 308400,
+    "station_id": 18133,
+    "food": null
+   },
+   {
+    "date": null,
+    "position": 1,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308400,
+    "station_id": 18133,
+    "food": {
+     "id": 2429246,
+     "name": "Jalapeno Burger",
+     "description": "Burger topped with Bacon, Cheese, jalapeno sauce, onions, and jalapeno peppers",
+     "rounded_nutrition_info": {
+      "calories": 660.0,
+      "g_fat": 44.0,
+      "g_saturated_fat": 15.0,
+      "g_trans_fat": null,
+      "mg_cholesterol": 121.0,
+      "g_carbs": 29.0,
+      "g_added_sugar": null,
+      "g_sugar": 4.0,
+      "mg_potassium": 440.0,
+      "mg_sodium": 1270.0,
+      "g_fiber": 2.0,
+      "g_protein": 35.0,
+      "mg_iron": 3.7,
+      "mg_calcium": 240.0,
+      "mg_vitamin_c": null,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 10.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "1",
+      "serving_size_unit": "sandwich"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Milk",
+        "slug": "milk",
+        "synced_name": "Milk"
+       },
+       {
+        "type": 1,
+        "name": "Egg",
+        "slug": "egg",
+        "synced_name": "Egg"
+       },
+       {
+        "type": 1,
+        "name": "Wheat",
+        "slug": "wheat",
+        "synced_name": "Wheat"
+       },
+       {
+        "type": 1,
+        "name": "Soy",
+        "slug": "soy",
+        "synced_name": "Soy"
+       },
+       {
+        "type": 1,
+        "name": "Contains Gluten",
+        "slug": "contains-gluten",
+        "synced_name": "Gluten"
+       }
+      ]
+     },
+     "ingredients": "Beef Patty, Hamburger Bun^, Cheddar Cheese^, Jalapeno Peppers^, Ranch Dressing^, Red Onions, Bacon^"
+    }
+   },
+   {
+    "date": null,
+    "position": 2,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308400,
+    "station_id": 18133,
+    "food": {
+     "id": 2384722,
+     "name": "Grilled Cheese Sandwich",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 330.0,
+      "g_fat": 21.0,
+      "g_saturated_fat": 10.0,
+      "g_trans_fat": 0.5,
+      "mg_cholesterol": 40.0,
+      "g_carbs": 28.0,
+      "g_added_sugar": null,
+      "g_sugar": 3.0,
+      "mg_potassium": 110.0,
+      "mg_sodium": 970.0,
+      "g_fiber": 2.0,
+      "g_protein": 11.0,
+      "mg_iron": 2.2,
+      "mg_calcium": 430.0,
+      "mg_vitamin_c": null,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 119.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "1",
+      "serving_size_unit": "sandwich"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Milk",
+        "slug": "milk",
+        "synced_name": "Milk"
+       },
+       {
+        "type": 1,
+        "name": "Wheat",
+        "slug": "wheat",
+        "synced_name": "Wheat"
+       },
+       {
+        "type": 1,
+        "name": "Soy",
+        "slug": "soy",
+        "synced_name": "Soy"
+       },
+       {
+        "type": 1,
+        "name": "Contains Gluten",
+        "slug": "contains-gluten",
+        "synced_name": "Gluten"
+       }
+      ]
+     },
+     "ingredients": "Wheat Bread^, American Cheese^, Margarine^"
+    }
+   },
+   {
+    "date": null,
+    "position": 3,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308400,
+    "station_id": 18133,
+    "food": {
+     "id": 2401587,
+     "name": "Roast Pork Broccoli Rabe Sandwich",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 590.0,
+      "g_fat": 31.0,
+      "g_saturated_fat": 11.0,
+      "g_trans_fat": null,
+      "mg_cholesterol": 93.0,
+      "g_carbs": 39.0,
+      "g_added_sugar": null,
+      "g_sugar": null,
+      "mg_potassium": 630.0,
+      "mg_sodium": 2640.0,
+      "g_fiber": 3.0,
+      "g_protein": 38.0,
+      "mg_iron": 5.1,
+      "mg_calcium": 420.0,
+      "mg_vitamin_c": 19.0,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 41.1,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "1",
+      "serving_size_unit": "sandwich"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Milk",
+        "slug": "milk",
+        "synced_name": "Milk"
+       },
+       {
+        "type": 1,
+        "name": "Wheat",
+        "slug": "wheat",
+        "synced_name": "Wheat"
+       },
+       {
+        "type": 1,
+        "name": "Contains Gluten",
+        "slug": "contains-gluten",
+        "synced_name": "Gluten"
+       }
+      ]
+     },
+     "ingredients": "Chicken Broth^, Water, Pork, Hoagie Roll^, Broccoli Rabe, Provolone Cheese^, Extra Virgin Olive Oil, Garlic, Cherry Peppers^, Kosher Salt^, Parsley, Black Pepper, Salt, Rosemary, Red Pepper"
+    }
+   },
+   {
+    "date": null,
+    "position": 4,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308400,
+    "station_id": 18133,
+    "food": {
+     "id": 2483389,
+     "name": "Waffle Fries",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 160.0,
+      "g_fat": 9.0,
+      "g_saturated_fat": 1.5,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 19.0,
+      "g_added_sugar": null,
+      "g_sugar": 1.0,
+      "mg_potassium": 240.0,
+      "mg_sodium": 320.0,
+      "g_fiber": 1.0,
+      "g_protein": 2.0,
+      "mg_iron": 0.4,
+      "mg_calcium": 10.0,
+      "mg_vitamin_c": null,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "1",
+      "serving_size_unit": "serving"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Wheat",
+        "slug": "wheat",
+        "synced_name": "Wheat"
+       },
+       {
+        "type": 1,
+        "name": "Contains Gluten",
+        "slug": "contains-gluten",
+        "synced_name": "Gluten"
+       },
+       {
+        "type": 1,
+        "name": "Climate Friendly",
+        "slug": "climate-friendly",
+        "synced_name": "Low Emissions"
+       }
+      ]
+     },
+     "ingredients": "French Fries^"
+    }
+   },
+   {
+    "date": null,
+    "position": 5,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308400,
+    "station_id": 18133,
+    "food": {
+     "id": 2482353,
+     "name": "French Fries",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 180.0,
+      "g_fat": 13.0,
+      "g_saturated_fat": 2.0,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 16.0,
+      "g_added_sugar": null,
+      "g_sugar": 1.0,
+      "mg_potassium": 240.0,
+      "mg_sodium": 20.0,
+      "g_fiber": 2.0,
+      "g_protein": 1.0,
+      "mg_iron": 0.2,
+      "mg_calcium": 10.0,
+      "mg_vitamin_c": null,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "1",
+      "serving_size_unit": "serving"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Climate Friendly",
+        "slug": "climate-friendly",
+        "synced_name": "Low Emissions"
+       }
+      ]
+     },
+     "ingredients": "French Fries (Potatoes, Vegetable Oil (Contains One Or More Of The Following Oils: Canola, Soybean, Cottonseed, Sunflower, Corn). Contains 2% or less of Dextrose, Sodium Acid Pyrophosphate Added To Maintain Color.), Soybean Oil^"
+    }
+   },
+   {
+    "date": null,
+    "position": 0,
+    "is_section_title": true,
+    "is_station_header": true,
+    "text": "Grill Lunch Specials",
+    "menu_id": 308393,
+    "station_id": 18131,
+    "food": null
+   },
+   {
+    "date": null,
+    "position": 1,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308393,
+    "station_id": 18131,
+    "food": {
+     "id": 849700,
+     "name": "Teriyaki Turkey, Pineapple, WW Bun",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 390.0,
+      "g_fat": 12.0,
+      "g_saturated_fat": 3.0,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 71.0,
+      "g_carbs": 44.0,
+      "g_added_sugar": null,
+      "g_sugar": 8.0,
+      "mg_potassium": 530.0,
+      "mg_sodium": 530.0,
+      "g_fiber": 4.0,
+      "g_protein": 29.0,
+      "mg_iron": 3.3,
+      "mg_calcium": 100.0,
+      "mg_vitamin_c": null,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": null,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "1",
+      "serving_size_unit": "each"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Wheat",
+        "slug": "wheat",
+        "synced_name": "Wheat"
+       },
+       {
+        "type": 1,
+        "name": "Soy",
+        "slug": "soy",
+        "synced_name": "Soy"
+       },
+       {
+        "type": 2,
+        "name": "Eat Well",
+        "slug": "eat-well",
+        "synced_name": "Eat Well"
+       },
+       {
+        "type": 1,
+        "name": "Contains Gluten",
+        "slug": "contains-gluten",
+        "synced_name": "Gluten"
+       },
+       {
+        "type": 1,
+        "name": "Climate Friendly",
+        "slug": "climate-friendly",
+        "synced_name": "Low Emissions"
+       }
+      ]
+     },
+     "ingredients": "Ground Turkey, Pineapple, Whole Wheat Hamburger Bun^, Yellow Onions, Green Onions, Less Sodium Gluten Free Soy Sauce^, Garlic, Ginger Root, Cooking Spray^, Canola Oil, Black Pepper"
+    }
+   },
+   {
+    "date": null,
+    "position": 2,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308393,
+    "station_id": 18131,
+    "food": {
+     "id": 2385017,
+     "name": "Texas Toast Triple Cheese Sandwich",
+     "description": "Classic grilled cheese with Cheddar, Provolone and Pepper Jack Cheeses on soft Texas bread",
+     "rounded_nutrition_info": {
+      "calories": 620.0,
+      "g_fat": 29.0,
+      "g_saturated_fat": 15.0,
+      "g_trans_fat": null,
+      "mg_cholesterol": 67.0,
+      "g_carbs": 66.0,
+      "g_added_sugar": null,
+      "g_sugar": 4.0,
+      "mg_potassium": 300.0,
+      "mg_sodium": 1310.0,
+      "g_fiber": 2.0,
+      "g_protein": 29.0,
+      "mg_iron": 4.4,
+      "mg_calcium": 650.0,
+      "mg_vitamin_c": null,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": null,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "1",
+      "serving_size_unit": "each"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Milk",
+        "slug": "milk",
+        "synced_name": "Milk"
+       },
+       {
+        "type": 1,
+        "name": "Egg",
+        "slug": "egg",
+        "synced_name": "Egg"
+       },
+       {
+        "type": 1,
+        "name": "Wheat",
+        "slug": "wheat",
+        "synced_name": "Wheat"
+       },
+       {
+        "type": 1,
+        "name": "Soy",
+        "slug": "soy",
+        "synced_name": "Soy"
+       },
+       {
+        "type": 1,
+        "name": "Contains Gluten",
+        "slug": "contains-gluten",
+        "synced_name": "Gluten"
+       }
+      ]
+     },
+     "ingredients": "Texas Toast^, Cheddar Cheese^, Provolone Cheese^, Pepper Jack Cheese^, Pan Coating^"
+    }
+   },
+   {
+    "date": null,
+    "position": 3,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308393,
+    "station_id": 18131,
+    "food": {
+     "id": 2385034,
+     "name": "Doritos Beef Chili and Cheese Hot Dog",
+     "description": "Beef hot dog topped with beef chili, scallions, corn chips, cheddar cheese and cilantro",
+     "rounded_nutrition_info": {
+      "calories": 460.0,
+      "g_fat": 30.0,
+      "g_saturated_fat": 11.0,
+      "g_trans_fat": null,
+      "mg_cholesterol": 54.0,
+      "g_carbs": 33.0,
+      "g_added_sugar": null,
+      "g_sugar": 4.0,
+      "mg_potassium": 320.0,
+      "mg_sodium": 1020.0,
+      "g_fiber": 2.0,
+      "g_protein": 16.0,
+      "mg_iron": 2.6,
+      "mg_calcium": 100.0,
+      "mg_vitamin_c": null,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 29.5,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "1",
+      "serving_size_unit": "each"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Milk",
+        "slug": "milk",
+        "synced_name": "Milk"
+       },
+       {
+        "type": 1,
+        "name": "Wheat",
+        "slug": "wheat",
+        "synced_name": "Wheat"
+       },
+       {
+        "type": 1,
+        "name": "Contains Gluten",
+        "slug": "contains-gluten",
+        "synced_name": "Gluten"
+       }
+      ]
+     },
+     "ingredients": "Beef Hot Dog^, Hot Dog Bun^, Nacho Cheese Doritos^, Ground Beef, Tomato Sauce^, Water, Yellow Onions, Cheddar Cheese^, Green Onions, Ketchup^, Red Wine Vinegar^, Cilantro, Unsweetened Chocolate^, Chili Powder^, Honey, Ground Paprika^, Kosher Salt^, Garlic, Black Pepper, Cinnamon, Turmeric, Cumin, Ground Allspice, Nutmeg, Coriander, Marjoram"
+    }
+   },
+   {
+    "date": null,
+    "position": 4,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308393,
+    "station_id": 18131,
+    "food": {
+     "id": 2482353,
+     "name": "French Fries",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 180.0,
+      "g_fat": 13.0,
+      "g_saturated_fat": 2.0,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 16.0,
+      "g_added_sugar": null,
+      "g_sugar": 1.0,
+      "mg_potassium": 240.0,
+      "mg_sodium": 20.0,
+      "g_fiber": 2.0,
+      "g_protein": 1.0,
+      "mg_iron": 0.2,
+      "mg_calcium": 10.0,
+      "mg_vitamin_c": null,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "1",
+      "serving_size_unit": "serving"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Climate Friendly",
+        "slug": "climate-friendly",
+        "synced_name": "Low Emissions"
+       }
+      ]
+     },
+     "ingredients": "French Fries (Potatoes, Vegetable Oil (Contains One Or More Of The Following Oils: Canola, Soybean, Cottonseed, Sunflower, Corn). Contains 2% or less of Dextrose, Sodium Acid Pyrophosphate Added To Maintain Color.), Soybean Oil^"
+    }
+   },
+   {
+    "date": null,
+    "position": 5,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308393,
+    "station_id": 18131,
+    "food": {
+     "id": 822490,
+     "name": "Fried Potato Wedges",
+     "description": "Crispy wedges of potato.",
+     "rounded_nutrition_info": {
+      "calories": 110.0,
+      "g_fat": 4.5,
+      "g_saturated_fat": 0.0,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 16.0,
+      "g_added_sugar": null,
+      "g_sugar": 1.0,
+      "mg_potassium": 440.0,
+      "mg_sodium": 10.0,
+      "g_fiber": 1.0,
+      "g_protein": 2.0,
+      "mg_iron": 0.6,
+      "mg_calcium": 10.0,
+      "mg_vitamin_c": 10.0,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "0.5",
+      "serving_size_unit": "cups"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Wheat",
+        "slug": "wheat",
+        "synced_name": "Wheat"
+       },
+       {
+        "type": 2,
+        "name": "Eat Well",
+        "slug": "eat-well",
+        "synced_name": "Eat Well"
+       }
+      ]
+     },
+     "ingredients": "Red Bliss Potatoes"
+    }
+   }
+  ]
+ },
+ "dine-in-vegan-delights": {
+  "date": "2026-10-01",
+  "menu_items": [
+   {
+    "date": null,
+    "position": 0,
+    "is_section_title": true,
+    "is_station_header": true,
+    "text": "Rooted Dinner Specials",
+    "menu_id": 308407,
+    "station_id": 23267,
+    "food": null
+   },
+   {
+    "date": null,
+    "position": 1,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308407,
+    "station_id": 23267,
+    "food": {
+     "id": 710426,
+     "name": "Three Bean Chili",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 240.0,
+      "g_fat": 2.5,
+      "g_saturated_fat": 0.0,
+      "g_trans_fat": null,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 46.0,
+      "g_added_sugar": null,
+      "g_sugar": 12.0,
+      "mg_potassium": 1220.0,
+      "mg_sodium": 710.0,
+      "g_fiber": 14.0,
+      "g_protein": 14.0,
+      "mg_iron": 6.6,
+      "mg_calcium": 160.0,
+      "mg_vitamin_c": 57.0,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "8",
+      "serving_size_unit": "oz portion"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Wheat",
+        "slug": "wheat",
+        "synced_name": "Wheat"
+       },
+       {
+        "type": 2,
+        "name": "Eat Well",
+        "slug": "eat-well",
+        "synced_name": "Eat Well"
+       },
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       },
+       {
+        "type": 2,
+        "name": "Vegan",
+        "slug": "vegan",
+        "synced_name": "Vegan"
+       }
+      ]
+     },
+     "ingredients": "Tomatoes^, Low Sodium Black Turtle Beans^, Low Sodium Cannellini Beans^, Low Sodium Kidney Beans^, Red Bell Peppers, White Onions, Celery, Cumin, Chili Powder^, Garlic, Extra Virgin Olive Oil, Coriander, Kosher Salt^, Black Pepper"
+    }
+   },
+   {
+    "date": null,
+    "position": 2,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308407,
+    "station_id": 23267,
+    "food": {
+     "id": 762931,
+     "name": "Yellow Rice",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 160.0,
+      "g_fat": 5.0,
+      "g_saturated_fat": 0.5,
+      "g_trans_fat": null,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 26.0,
+      "g_added_sugar": null,
+      "g_sugar": 0.0,
+      "mg_potassium": 65.0,
+      "mg_sodium": 65.0,
+      "g_fiber": 1.0,
+      "g_protein": 2.0,
+      "mg_iron": 1.6,
+      "mg_calcium": 20.0,
+      "mg_vitamin_c": 1.0,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "4",
+      "serving_size_unit": "oz portion"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 2,
+        "name": "Eat Well",
+        "slug": "eat-well",
+        "synced_name": "Eat Well"
+       },
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       },
+       {
+        "type": 2,
+        "name": "Vegan",
+        "slug": "vegan",
+        "synced_name": "Vegan"
+       }
+      ]
+     },
+     "ingredients": "Water, Long Grain White Rice, Extra Virgin Olive Oil, Low Sodium Vegetable Base^, Cilantro, Garlic, Onion, Turmeric, Black Pepper"
+    }
+   },
+   {
+    "date": null,
+    "position": 3,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308407,
+    "station_id": 23267,
+    "food": {
+     "id": 2753737,
+     "name": "Chipotle-Agave Roasted Zucchini",
+     "description": "Roasted zucchini with salt, pepper, and oil",
+     "rounded_nutrition_info": {
+      "calories": 120.0,
+      "g_fat": 2.5,
+      "g_saturated_fat": 0.0,
+      "g_trans_fat": null,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 24.0,
+      "g_added_sugar": null,
+      "g_sugar": 20.0,
+      "mg_potassium": 240.0,
+      "mg_sodium": 55.0,
+      "g_fiber": 1.0,
+      "g_protein": 1.0,
+      "mg_iron": 0.5,
+      "mg_calcium": 10.0,
+      "mg_vitamin_c": null,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "0.5",
+      "serving_size_unit": "cups"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       },
+       {
+        "type": 2,
+        "name": "Vegan",
+        "slug": "vegan",
+        "synced_name": "Vegan"
+       },
+       {
+        "type": 1,
+        "name": "Climate Friendly",
+        "slug": "climate-friendly",
+        "synced_name": "Low Emissions"
+       }
+      ]
+     },
+     "ingredients": "Zucchini, Agave Nectar, Chipotle Peppers^, Canola Oil, Kosher Salt^, Black Pepper"
+    }
+   },
+   {
+    "date": null,
+    "position": 4,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308407,
+    "station_id": 23267,
+    "food": {
+     "id": 2499388,
+     "name": "Roasted Mini Bell Peppers",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 25.0,
+      "g_fat": 0.0,
+      "g_saturated_fat": 0.0,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 6.0,
+      "g_added_sugar": null,
+      "g_sugar": 3.0,
+      "mg_potassium": 180.0,
+      "mg_sodium": 1160.0,
+      "g_fiber": 2.0,
+      "g_protein": 1.0,
+      "mg_iron": 0.5,
+      "mg_calcium": 10.0,
+      "mg_vitamin_c": 99.0,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": null,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "3",
+      "serving_size_unit": "each"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 1,
+        "name": "Soy",
+        "slug": "soy",
+        "synced_name": "Soy"
+       },
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       },
+       {
+        "type": 2,
+        "name": "Vegan",
+        "slug": "vegan",
+        "synced_name": "Vegan"
+       },
+       {
+        "type": 1,
+        "name": "Climate Friendly",
+        "slug": "climate-friendly",
+        "synced_name": "Low Emissions"
+       }
+      ]
+     },
+     "ingredients": "Mini Sweet Peppers, Kosher Salt^, Black Pepper, Pan Coating^"
+    }
+   },
+   {
+    "date": null,
+    "position": 0,
+    "is_section_title": true,
+    "is_station_header": true,
+    "text": "Rooted Lunch Specials",
+    "menu_id": 308389,
+    "station_id": 23261,
+    "food": null
+   },
+   {
+    "date": null,
+    "position": 1,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308389,
+    "station_id": 23261,
+    "food": {
+     "id": 2499401,
+     "name": "Cajun-Style Lentil Stew",
+     "description": "Lentils, tomatoes, Cajun spices",
+     "rounded_nutrition_info": {
+      "calories": 240.0,
+      "g_fat": 5.0,
+      "g_saturated_fat": 0.0,
+      "g_trans_fat": null,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 36.0,
+      "g_added_sugar": null,
+      "g_sugar": null,
+      "mg_potassium": 610.0,
+      "mg_sodium": 350.0,
+      "g_fiber": 7.0,
+      "g_protein": 11.0,
+      "mg_iron": 3.3,
+      "mg_calcium": 60.0,
+      "mg_vitamin_c": null,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "1",
+      "serving_size_unit": "ladle8oz"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 2,
+        "name": "Eat Well",
+        "slug": "eat-well",
+        "synced_name": "Eat Well"
+       },
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       },
+       {
+        "type": 2,
+        "name": "Vegan",
+        "slug": "vegan",
+        "synced_name": "Vegan"
+       },
+       {
+        "type": 1,
+        "name": "Climate Friendly",
+        "slug": "climate-friendly",
+        "synced_name": "Low Emissions"
+       }
+      ]
+     },
+     "ingredients": "Water, No Added Salt Tomatoes^, Green Lentils, Yellow Onions, Burgundy Cooking Wine^, Tomato Paste^, Vegetable Broth Concentrate^, Canola Oil, Light Brown Sugar^, Garlic, Kosher Salt^, Basil, Bay Leaf, Oregano, Black Pepper, Thyme"
+    }
+   },
+   {
+    "date": null,
+    "position": 2,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308389,
+    "station_id": 23261,
+    "food": {
+     "id": 1029269,
+     "name": "Carrots with Herbs",
+     "description": "Chopped Carrots with Herbs",
+     "rounded_nutrition_info": {
+      "calories": 50.0,
+      "g_fat": 1.5,
+      "g_saturated_fat": 0.0,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 9.0,
+      "g_added_sugar": null,
+      "g_sugar": 4.0,
+      "mg_potassium": 300.0,
+      "mg_sodium": 65.0,
+      "g_fiber": 3.0,
+      "g_protein": 1.0,
+      "mg_iron": 0.3,
+      "mg_calcium": 30.0,
+      "mg_vitamin_c": 6.0,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "0.5",
+      "serving_size_unit": "cups"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       },
+       {
+        "type": 2,
+        "name": "Vegan",
+        "slug": "vegan",
+        "synced_name": "Vegan"
+       },
+       {
+        "type": 1,
+        "name": "Climate Friendly",
+        "slug": "climate-friendly",
+        "synced_name": "Low Emissions"
+       }
+      ]
+     },
+     "ingredients": "Carrots, Canola Oil, Parsley, Basil"
+    }
+   },
+   {
+    "date": null,
+    "position": 3,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308389,
+    "station_id": 23261,
+    "food": {
+     "id": 1358776,
+     "name": "Roasted Herb Potatoes",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 100.0,
+      "g_fat": 2.5,
+      "g_saturated_fat": 0.0,
+      "g_trans_fat": 0.0,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 18.0,
+      "g_added_sugar": null,
+      "g_sugar": 1.0,
+      "mg_potassium": 510.0,
+      "mg_sodium": 10.0,
+      "g_fiber": 2.0,
+      "g_protein": 2.0,
+      "mg_iron": 0.7,
+      "mg_calcium": 10.0,
+      "mg_vitamin_c": 12.0,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "0.5",
+      "serving_size_unit": "cups"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 2,
+        "name": "Eat Well",
+        "slug": "eat-well",
+        "synced_name": "Eat Well"
+       },
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       },
+       {
+        "type": 2,
+        "name": "Vegan",
+        "slug": "vegan",
+        "synced_name": "Vegan"
+       }
+      ]
+     },
+     "ingredients": "Red Bliss Potatoes, Canola Oil, Ground Paprika^, Lemon, Parsley, Basil, Oregano, Cilantro"
+    }
+   },
+   {
+    "date": null,
+    "position": 4,
+    "is_section_title": false,
+    "is_station_header": false,
+    "text": "",
+    "menu_id": 308389,
+    "station_id": 23261,
+    "food": {
+     "id": 2929759,
+     "name": "Charred Broccolini",
+     "description": "",
+     "rounded_nutrition_info": {
+      "calories": 50.0,
+      "g_fat": 3.5,
+      "g_saturated_fat": 0.5,
+      "g_trans_fat": null,
+      "mg_cholesterol": 0.0,
+      "g_carbs": 4.0,
+      "g_added_sugar": null,
+      "g_sugar": 1.0,
+      "mg_potassium": 180.0,
+      "mg_sodium": 75.0,
+      "g_fiber": 2.0,
+      "g_protein": 2.0,
+      "mg_iron": 0.4,
+      "mg_calcium": 30.0,
+      "mg_vitamin_c": 52.0,
+      "iu_vitamin_a": null,
+      "re_vitamin_a": null,
+      "mcg_vitamin_a": null,
+      "mg_vitamin_d": 0.0,
+      "mcg_vitamin_d": null
+     },
+     "serving_size_info": {
+      "serving_size_amount": "2",
+      "serving_size_unit": "oz portion"
+     },
+     "has_nutrition_info": true,
+     "icons": {
+      "food_icons": [
+       {
+        "type": 2,
+        "name": "Eat Well",
+        "slug": "eat-well",
+        "synced_name": "Eat Well"
+       },
+       {
+        "type": 2,
+        "name": "Vegetarian",
+        "slug": "vegetarian",
+        "synced_name": "Vegetarian"
+       },
+       {
+        "type": 2,
+        "name": "Vegan",
+        "slug": "vegan",
+        "synced_name": "Vegan"
+       }
+      ]
+     },
+     "ingredients": "Broccolini, Lemon Juice, Extra Virgin Olive Oil, Kosher Salt^, Black Pepper"
+    }
+   }
+  ]
+ }
+}

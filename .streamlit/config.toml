@@ -1,0 +1,16 @@
+[theme]
+base = "light"
+primaryColor = "#990000"
+backgroundColor = "#EEF1F4"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1F2430"
+
+[server]
+headless = true
+address = "localhost"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

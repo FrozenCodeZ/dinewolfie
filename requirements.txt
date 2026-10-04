@@ -1,0 +1,6 @@
+# Tested with Python 3.14 on Windows 11 (3.11+ should work).
+claude-agent-sdk==0.2.163
+streamlit==1.65.0
+requests==2.34.2
+python-dotenv==1.2.4
+pytest==9.1.1

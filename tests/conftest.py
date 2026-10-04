@@ -1,0 +1,33 @@
+"""Shared test setup: run everything offline against the committed sample data,
+with throwaway prefs/history files so tests never touch your real memory."""
+import json
+
+import pytest
+
+import config
+from src import tools as T
+
+SAMPLE_DATE = "2026-10-01"
+
+
+@pytest.fixture(autouse=True)
+def offline_sample(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DATA_MODE", "sample")
+    monkeypatch.setattr(config, "PREFS_FILE", tmp_path / "prefs.json")
+    monkeypatch.setattr(config, "HISTORY_FILE", tmp_path / "history.json")
+    T.clear_cache()
+    T.set_simulation()
+    yield
+    T.set_simulation()
+    T.clear_cache()
+
+
+@pytest.fixture
+def prefs():
+    """Write prefs for a test: prefs(diet=["vegan"], allergies=["peanuts"])."""
+    def _write(**values):
+        data = dict(T.DEFAULT_PREFS)
+        data.update(values)
+        config.PREFS_FILE.write_text(json.dumps(data), encoding="utf-8")
+        return data
+    return _write

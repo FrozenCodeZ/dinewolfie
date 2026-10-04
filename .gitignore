@@ -1,0 +1,22 @@
+# secrets
+.env
+
+# local data (cached menus, your own memory files)
+data/*
+!data/sample/
+data/sample/*
+!data/sample/*.json
+prefs.local.json
+history.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

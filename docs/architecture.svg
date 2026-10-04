@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif">
+  <title>DineWolfie architecture: goal, agent loop, tools, plan, phone</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5B6472"/>
+    </marker>
+    <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#990000"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="600" fill="#EEF1F4"/>
+
+  <!-- Goal -->
+  <g>
+    <rect x="30" y="230" width="190" height="130" rx="14" fill="#FFFFFF" stroke="#990000" stroke-width="2.5"/>
+    <text x="125" y="268" text-anchor="middle" font-size="20" font-weight="700" fill="#1F2430">You</text>
+    <text x="125" y="296" text-anchor="middle" font-size="14" fill="#5B6472">"Vegetarian, 120 g</text>
+    <text x="125" y="315" text-anchor="middle" font-size="14" fill="#5B6472">protein, near West</text>
+    <text x="125" y="334" text-anchor="middle" font-size="14" fill="#5B6472">at lunch"</text>
+  </g>
+  <line x1="222" y1="295" x2="292" y2="295" stroke="#990000" stroke-width="3" marker-end="url(#arrowRed)"/>
+  <text x="257" y="282" text-anchor="middle" font-size="13" fill="#990000" font-weight="700">goal</text>
+
+  <!-- Agent loop -->
+  <rect x="296" y="70" width="430" height="450" rx="22" fill="#D5DCE4"/>
+  <text x="511" y="108" text-anchor="middle" font-size="22" font-weight="800" fill="#1F2430">DineWolfie agent</text>
+  <text x="511" y="131" text-anchor="middle" font-size="14" fill="#5B6472">Claude, via the Claude Agent SDK</text>
+
+  <g font-size="16" fill="#1F2430">
+    <rect x="336" y="156" width="350" height="46" rx="10" fill="#FFFFFF"/>
+    <text x="356" y="185"><tspan font-weight="700">1  Remember</tspan><tspan fill="#5B6472">  read prefs + recent plans</tspan></text>
+    <rect x="336" y="214" width="350" height="46" rx="10" fill="#FFFFFF"/>
+    <text x="356" y="243"><tspan font-weight="700">2  Plan</tspan><tspan fill="#5B6472">  write the steps it will take</tspan></text>
+    <rect x="336" y="272" width="350" height="46" rx="10" fill="#FFFFFF"/>
+    <text x="356" y="301"><tspan font-weight="700">3  Act</tspan><tspan fill="#5B6472">  call tools: menus, search, compare</tspan></text>
+    <rect x="336" y="330" width="350" height="46" rx="10" fill="#FFFFFF"/>
+    <text x="356" y="359"><tspan font-weight="700">4  Observe</tspan><tspan fill="#5B6472">  read every result's status</tspan></text>
+    <rect x="336" y="388" width="350" height="46" rx="10" fill="#FFF3D1" stroke="#E0A100" stroke-width="2"/>
+    <text x="356" y="417"><tspan font-weight="700" fill="#9A6200">5  Adapt</tspan><tspan fill="#9A6200">  other hall, other station, say why</tspan></text>
+    <rect x="336" y="446" width="350" height="46" rx="10" fill="#FFFFFF"/>
+    <text x="356" y="475"><tspan font-weight="700">6  Finish</tspan><tspan fill="#5B6472">  submit plan to the checker</tspan></text>
+  </g>
+  <path d="M334 411 C 306 411, 306 295, 332 295" fill="none" stroke="#E0A100" stroke-width="2.5" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
+
+  <!-- Tools -->
+  <g font-size="14">
+    <rect x="800" y="70" width="370" height="118" rx="14" fill="#FFFFFF"/>
+    <text x="820" y="100" font-size="17" font-weight="700" fill="#1F2430">Real menus</text>
+    <text x="820" y="124" fill="#5B6472">get_menu, search_items, compare_halls</text>
+    <text x="820" y="146" fill="#5B6472">East + West from SBU's Nutrislice API,</text>
+    <text x="820" y="168" fill="#5B6472">cached on disk, fetched at most once a day</text>
+
+    <rect x="800" y="206" width="370" height="96" rx="14" fill="#FFFFFF"/>
+    <text x="820" y="236" font-size="17" font-weight="700" fill="#1F2430">Memory</text>
+    <text x="820" y="260" fill="#5B6472">prefs.json: diet, allergies, goals, dislikes</text>
+    <text x="820" y="282" fill="#5B6472">history.json: past plans, for variety</text>
+
+    <rect x="800" y="320" width="370" height="96" rx="14" fill="#FFFFFF"/>
+    <text x="820" y="350" font-size="17" font-weight="700" fill="#1F2430">Math + safety checker</text>
+    <text x="820" y="374" fill="#5B6472">sum_nutrition, submit_plan: code does the math</text>
+    <text x="820" y="396" fill="#5B6472">and rejects made-up items or allergens</text>
+  </g>
+  <g stroke="#5B6472" stroke-width="2.5">
+    <line x1="728" y1="160" x2="796" y2="130" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+    <line x1="728" y1="255" x2="796" y2="255" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+    <line x1="728" y1="440" x2="796" y2="375" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  </g>
+
+  <!-- Outputs -->
+  <rect x="800" y="446" width="175" height="120" rx="14" fill="#FFFFFF" stroke="#1D3557" stroke-width="2.5"/>
+  <text x="887" y="478" text-anchor="middle" font-size="17" font-weight="700" fill="#1F2430">Plan tray</text>
+  <text x="887" y="502" text-anchor="middle" font-size="13" fill="#5B6472">web app shows each</text>
+  <text x="887" y="520" text-anchor="middle" font-size="13" fill="#5B6472">step live, then the</text>
+  <text x="887" y="538" text-anchor="middle" font-size="13" fill="#5B6472">day's three meals</text>
+
+  <rect x="995" y="446" width="175" height="120" rx="14" fill="#FFFFFF" stroke="#990000" stroke-width="2.5"/>
+  <text x="1082" y="478" text-anchor="middle" font-size="17" font-weight="700" fill="#1F2430">Your phone</text>
+  <text x="1082" y="502" text-anchor="middle" font-size="13" fill="#5B6472">every morning, Task</text>
+  <text x="1082" y="520" text-anchor="middle" font-size="13" fill="#5B6472">Scheduler runs the agent</text>
+  <text x="1082" y="538" text-anchor="middle" font-size="13" fill="#5B6472">and ntfy pushes the plan</text>
+  <path d="M600 520 L600 560 L780 560 L780 506 L796 506" fill="none" stroke="#1D3557" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="690" y="580" text-anchor="middle" font-size="13" fill="#1D3557">accepted plan</text>
+</svg>
