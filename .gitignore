@@ -20,3 +20,6 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+
+# tool scratch
+.playwright-mcp/

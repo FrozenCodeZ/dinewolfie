@@ -52,7 +52,7 @@
 
     <rect x="800" y="206" width="370" height="96" rx="14" fill="#FFFFFF"/>
     <text x="820" y="236" font-size="17" font-weight="700" fill="#1F2430">Memory</text>
-    <text x="820" y="260" fill="#5B6472">prefs.json: diet, allergies, goals, dislikes</text>
+    <text x="820" y="260" fill="#5B6472">prefs.json: diet, allergies, goals, never-eat, favorites</text>
     <text x="820" y="282" fill="#5B6472">history.json: past plans, for variety</text>
 
     <rect x="800" y="320" width="370" height="96" rx="14" fill="#FFFFFF"/>

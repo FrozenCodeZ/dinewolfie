@@ -65,7 +65,8 @@ def print_event(event: dict) -> None:
 
 
 def format_plan(plan: dict) -> str:
-    lines = [f"{BOLD}🍽️  {plan.get('headline') or 'Your plan'}{RESET}  ({plan['date']})"]
+    cheat = "  🎉 cheat day" if plan.get("cheat_day") else ""
+    lines = [f"{BOLD}🍽️  {plan.get('headline') or 'Your plan'}{RESET}  ({plan['date']}){cheat}"]
     for meal in plan["meals"]:
         t = meal["totals"]
         lines.append(f"\n{BOLD}{meal['meal'].title()} @ {meal['hall']}{RESET}  "
@@ -74,9 +75,15 @@ def format_plan(plan: dict) -> str:
             serv = f"{item['servings']:g}× " if item["servings"] != 1 else ""
             nut = ("nutrition not listed" if item["calories"] is None
                    else f"{item['protein_g']} g P · {item['calories']} kcal per serving")
-            lines.append(f"  • {serv}{item['name']}  {DIM}({item['station']}; {nut}){RESET}")
+            mark = (" 🍪" if item.get("treat") else "") + (" ♥" if item.get("favorite") else "")
+            lines.append(f"  • {serv}{item['name']}{mark}  {DIM}({item['station']}; {nut}){RESET}")
         if meal.get("reason"):
             lines.append(f"    {DIM}↳ {meal['reason']}{RESET}")
+        for alt in meal.get("alternatives") or []:
+            names = " + ".join(i["name"] for i in alt["items"])
+            where = f" at {alt['hall']}" if alt["hall"] != meal["hall"] else ""
+            lines.append(f"    {CYAN}⇄ Or swap{where}: {names}{RESET} {DIM}({alt.get('note', '')}; "
+                         f"{alt['totals'].get('protein_g', 0)} g protein){RESET}")
     t = plan["totals"]
     lines.append(f"\n{BOLD}Totals:{RESET} {t['protein_g']} g protein · {t['calories']} kcal · "
                  f"{t['carbs_g']} g carbs · {t['fat_g']} g fat")

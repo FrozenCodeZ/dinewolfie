@@ -40,6 +40,16 @@ _ITEMS = {"type": "array", "items": {
     "type": "object",
     "properties": {"id": {"type": "string"}, "servings": {"type": "number", "minimum": 0.25, "maximum": 4}},
     "required": ["id"]}}
+_PLAN_ITEMS = {"type": "array", "items": {
+    "type": "object",
+    "properties": {"id": {"type": "string"}, "servings": {"type": "number", "minimum": 0.25, "maximum": 4},
+                   "treat": {"type": "boolean", "description": "true if this is the day's treat"}},
+    "required": ["id"]}}
+_ALTERNATIVES = {"type": "array", "description": "1-2 swaps for this meal with similar protein.", "items": {
+    "type": "object",
+    "properties": {"hall": _HALL, "items": _PLAN_ITEMS,
+                   "note": {"type": "string", "description": "When to pick it, e.g. 'if the Grill line is long'"}},
+    "required": ["items", "note"]}}
 
 
 def _obj(props: dict, required: list[str] | None = None) -> dict:
@@ -100,15 +110,16 @@ TOOL_SPECS = [
           ["problem", "change"]),
      T.log_adaptation, True),
     ("submit_plan",
-     "Submit the final day plan. A checker verifies every item id against the real menu for that hall/meal "
-     "and the user's allergies and diet, then computes totals. If status is 'rejected', fix the problems "
-     "and submit again.",
+     "Submit the final day plan. A checker verifies every item id (main picks and swaps) against the real "
+     "menu for that hall/meal and the user's allergies, diet and never-eat list, then computes totals. If "
+     "status is 'rejected', fix the problems and submit again.",
      _obj({"date": {"type": "string"},
            "goal": {"type": "string", "description": "The user's goal in a few words."},
            "headline": {"type": "string", "description": "One short line summarizing the day."},
            "meals": {"type": "array", "items": _obj({
-               "meal": _MEAL, "hall": _HALL, "items": _ITEMS,
-               "reason": {"type": "string", "description": "One line: why this hall and these items."}},
+               "meal": _MEAL, "hall": _HALL, "items": _PLAN_ITEMS,
+               "reason": {"type": "string", "description": "One line: why this hall and these items."},
+               "alternatives": _ALTERNATIVES},
                ["meal", "hall", "items", "reason"])},
            "adaptations": {**_STRS, "description": "Each change you made because something failed/didn't fit."},
            "tips": {**_STRS, "description": "Optional practical tips, e.g. how to close a protein gap."}},
@@ -234,12 +245,24 @@ and submit again. Put every change you made into "adaptations".
 7. After submit_plan is accepted, reply with a short, friendly summary that reads well on a phone (under 120 \
 words): each meal with its hall and items, the totals, and any gap or caveat.
 
+Be a good friend about food, not a calculator:
+- {name_line}
+- Give each meal 1 swap in "alternatives" (similar protein, can be at the other hall) with a short note on \
+when to pick it ("if the Grill line is long", "if you want something warm").
+- If one of the user's favorites is on today's menu (search results mark it "favorite": true), use it and say so.
+- Treats setting: {treats}. never = no treats. sometimes = one small treat on days the goal still fits. \
+often = a treat most days. Mark it with "treat": true. Skip treats when the user is cutting or asks for light.
+- {cheat_line}
+- Talk like a friend who knows the dining halls: warm, short, a little playful. No lectures, no food guilt.
+
 Rules:
 - Never invent menu items, ids or nutrition numbers. Only use what the tools return. If an item has no \
 nutrition data, say "nutrition not listed" and don't guess.
-- Allergies and diet are hard rules. Dislikes are soft: avoid them unless nothing else works, and say so.
+- Allergies, diet and the never_eat list are hard rules. Dislikes are soft: avoid them unless nothing else \
+works, and say so.
 - Only call update_prefs when the user clearly states a lasting preference ("I'm vegan now", "remember I'm \
-allergic to peanuts"). A one-off wish ("I want pizza today") is not a preference.
+allergic to peanuts", "never give me olives again" -> never_eat, "I love the tofu scramble" -> favorites). \
+A one-off wish ("I want pizza today") is not a preference.
 - A meal is usually 2-4 items. You may use up to 3 servings of an item if that's realistic (two Greek yogurts).
 - If the goal can't be reached, build the closest plan, say how many grams short it is, and give one concrete \
 fix (for example "add a second Greek yogurt at breakfast").
@@ -249,9 +272,17 @@ fix (for example "add a second Greek yogurt at breakfast").
 
 def build_options(plan_date: date, resume: str | None = None) -> ClaudeAgentOptions:
     now = datetime.now()
+    prefs = T.read_prefs()
+    name_line = (f"The user's name is {prefs['name']}; use it once, naturally." if prefs.get("name")
+                 else "You don't know the user's name; don't make one up.")
+    cheat_line = (f"{plan_date.strftime('%A')} is one of the user's cheat days: relax calorie limits, pick the "
+                  "most enjoyable options that still respect allergies, diet and never_eat, include a treat, "
+                  "and mention it's a cheat day." if T.is_cheat_day(plan_date, prefs)
+                  else "The plan date is not a cheat day.")
     system = SYSTEM_PROMPT.format(weekday=now.strftime("%A"), today=now.date().isoformat(),
                                   now=now.strftime("%H:%M"), plan_date=plan_date.isoformat(),
-                                  plan_weekday=plan_date.strftime("%A"))
+                                  plan_weekday=plan_date.strftime("%A"), name_line=name_line,
+                                  treats=prefs.get("treats") or "sometimes", cheat_line=cheat_line)
     return ClaudeAgentOptions(
         system_prompt=system,
         mcp_servers={SERVER: build_server()},
@@ -335,7 +366,7 @@ def run_agent(goal: str, plan_date: date | None = None,
 def default_goal(prefs: dict | None = None) -> str:
     """The goal used by the morning run, built from saved preferences."""
     prefs = prefs or T.read_prefs()
-    bits = ["Plan my breakfast, lunch and dinner for today"]
+    bits = ["Plan my breakfast, lunch and dinner"]
     if prefs.get("diet"):
         bits.append(f"I'm {' and '.join(prefs['diet'])}")
     if prefs.get("daily_protein_goal_g"):

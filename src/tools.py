@@ -134,10 +134,15 @@ DEFAULT_PREFS = {
     "daily_calorie_goal": None,
     "max_calories_per_meal": None,
     "favorite_hall": None,
-    "dislikes": [],
+    "dislikes": [],          # soft: avoided unless nothing else works
+    "never_eat": [],         # hard blacklist: the checker rejects these, like allergies
+    "favorites": [],         # preferred when they're on the menu
+    "treats": "sometimes",   # never | sometimes | often
+    "cheat_days": [],        # e.g. ["Friday"]: relaxed calories, a treat is welcome
     "meals_to_plan": ["breakfast", "lunch", "dinner"],
     "notes": [],
 }
+TREAT_LEVELS = ("never", "sometimes", "often")
 
 ALLERGY_SYNONYMS = {
     "dairy": ["milk"], "lactose": ["milk"], "milk": ["milk"],
@@ -235,6 +240,30 @@ def dislike_hits(item: dict, dislikes: list[str]) -> list[str]:
     return [d for d in dislikes or [] if _stem(d) and _stem(d) in text]
 
 
+def blacklist_hits(item: dict, never_eat: list[str]) -> list[str]:
+    """Hard blacklist: same keyword matching as dislikes, but enforced by the checker."""
+    return dislike_hits(item, never_eat)
+
+
+def is_favorite(item: dict, favorites: list[str]) -> bool:
+    return bool(dislike_hits(item, favorites))
+
+
+TREAT_WORDS = ("cookie", "brownie", "cake", "pie", "donut", "doughnut", "muffin", "ice cream", "fries",
+               "pudding", "cheesecake", "cupcake", "churro", "milkshake", "croissant", "danish",
+               "cinnamon roll", "nachos", "onion rings", "mozzarella sticks", "pizza", "waffle", "pancake")
+
+
+def looks_like_treat(item: dict) -> bool:
+    name = item["name"].lower()
+    return item.get("station", "").lower().startswith("dessert") or any(w in name for w in TREAT_WORDS)
+
+
+def is_cheat_day(day: date, prefs: dict | None = None) -> bool:
+    prefs = prefs or read_prefs()
+    return day.strftime("%A").lower() in {d.lower() for d in prefs.get("cheat_days") or []}
+
+
 def compact(item: dict) -> dict:
     """The fields Claude needs to choose, without the bulky ones."""
     return {
@@ -275,6 +304,12 @@ def get_prefs() -> dict:
     bits = [", ".join(prefs["diet"]) or "no diet restriction",
             f"allergies: {', '.join(prefs['allergies']) or 'none'}",
             f"protein goal {goal} g" if goal else "no protein goal"]
+    if prefs.get("never_eat"):
+        bits.append(f"never: {', '.join(prefs['never_eat'])}")
+    if prefs.get("favorites"):
+        bits.append(f"loves: {', '.join(prefs['favorites'])}")
+    if prefs.get("cheat_days"):
+        bits.append(f"cheat days: {', '.join(prefs['cheat_days'])}")
     return {"status": "ok", "prefs": prefs, "summary": "Memory loaded: " + "; ".join(bits) + "."}
 
 
@@ -344,9 +379,11 @@ def search_items(meal: str, hall: str = "any", date: str | None = None,
     codes = allergen_codes(list(exclude_allergens or []) + list(prefs["allergies"]))
     diet = list(require_tags or []) + list(prefs["diet"])
     dislikes = list(exclude_keywords or []) + list(prefs["dislikes"])
+    never_eat = list(prefs.get("never_eat") or [])
+    favorites = list(prefs.get("favorites") or [])
 
-    kept, counts, hall_status = [], {"allergen": 0, "diet": 0, "dislike": 0, "no_nutrition": 0,
-                                     "protein": 0, "calories": 0, "station": 0}, {}
+    kept, counts, hall_status = [], {"allergen": 0, "diet": 0, "never_eat": 0, "dislike": 0,
+                                     "no_nutrition": 0, "protein": 0, "calories": 0, "station": 0}, {}
     for h in halls:
         items, meta = _menu(h, meal, day)
         hall_status[h] = meta["status"]
@@ -357,6 +394,8 @@ def search_items(meal: str, hall: str = "any", date: str | None = None,
                 counts["allergen"] += 1
             elif not diet_ok(item, diet):
                 counts["diet"] += 1
+            elif blacklist_hits(item, never_eat):
+                counts["never_eat"] += 1
             elif dislike_hits(item, dislikes):
                 counts["dislike"] += 1
             elif (min_protein_g or max_calories) and item["calories"] is None:
@@ -366,9 +405,16 @@ def search_items(meal: str, hall: str = "any", date: str | None = None,
             elif max_calories and (item["calories"] or 0) > float(max_calories):
                 counts["calories"] += 1
             else:
-                kept.append({**compact(item), "hall": h})
+                row = {**compact(item), "hall": h}
+                if is_favorite(item, favorites):
+                    row["favorite"] = True
+                if looks_like_treat(item):
+                    row["treat"] = True
+                kept.append(row)
 
     kept.sort(key=SORTS.get(sort_by, SORTS["protein_per_calorie"]))
+    if favorites:  # favorites float to the top, otherwise keep the chosen order
+        kept.sort(key=lambda i: not i.get("favorite"))
     limit = max(1, min(int(limit or 12), 40))
     by_station: dict[str, int] = {}
     for item in kept:
@@ -383,7 +429,8 @@ def search_items(meal: str, hall: str = "any", date: str | None = None,
     if missing:
         summary += f" Not available: {', '.join(f'{h} ({hall_status[h]})' for h in missing)}."
     return {"status": status, "meal": meal, "date": day.isoformat(), "hall_status": hall_status,
-            "filters_applied": {"allergens_avoided": sorted(codes), "diet": diet, "dislikes": dislikes,
+            "filters_applied": {"allergens_avoided": sorted(codes), "diet": diet, "never_eat": never_eat,
+                                "dislikes": dislikes,
                                 "min_protein_g": min_protein_g, "max_calories": max_calories},
             "match_count": len(kept), "matches_by_station": by_station, "excluded_counts": excluded,
             "items": kept[:limit], "summary": summary}
@@ -473,6 +520,12 @@ def log_adaptation(problem: str, change: str, reason: str = "") -> dict:
 
 # --- Final answer ------------------------------------------------------------------------
 
+def _totals(rows: list[dict], day: date) -> dict:
+    if not rows:
+        return {}
+    return sum_nutrition([{"id": i["id"], "servings": i["servings"]} for i in rows], day.isoformat())["totals"]
+
+
 def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
     """Check a proposed plan against the real menu and the user's constraints."""
     problems = []
@@ -483,6 +536,36 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
     prefs = read_prefs()
     codes = allergen_codes(prefs["allergies"])
     meals_out, all_entries = [], []
+
+    def check_items(entries: list, hall: str, meal: str, on_menu: dict, label: str) -> list[dict]:
+        """Validate one list of {id, servings, treat} against the menu and the user's hard rules."""
+        out = []
+        for entry in entries or []:
+            item_id = str(entry.get("id", "")).upper()
+            servings = float(entry.get("servings", 1) or 1)
+            item = on_menu.get(item_id)
+            if item is None:
+                problems.append(f"{label}: item id {item_id!r} is not on the {hall} {meal} menu for {day}. "
+                                "Only use ids returned by get_menu/search_items for that hall and meal.")
+                continue
+            bad = allergy_conflicts(item, codes)
+            if bad:
+                problems.append(f"{label}: {item['name']} conflicts with allergies {bad}. Remove it.")
+            if not diet_ok(item, prefs["diet"]):
+                problems.append(f"{label}: {item['name']} doesn't fit the diet {prefs['diet']}. Remove it.")
+            banned = blacklist_hits(item, prefs.get("never_eat"))
+            if banned:
+                problems.append(f"{label}: {item['name']} is on the never-eat list ({', '.join(banned)}). "
+                                "Remove it.")
+            if not 0.25 <= servings <= 4:
+                problems.append(f"{label}: servings for {item['name']} must be between 0.25 and 4.")
+            row = {**compact(item), "servings": servings}
+            if entry.get("treat"):
+                row["treat"] = True
+            if is_favorite(item, prefs.get("favorites")):
+                row["favorite"] = True
+            out.append(row)
+        return out
     for meal_plan in plan.get("meals", []):
         try:
             meal = normalize_meal(meal_plan.get("meal", ""))
@@ -492,34 +575,35 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
             continue
         menu_items, meta = _menu(hall, meal, day)
         on_menu = {i["id"].upper(): i for i in menu_items}
-        items_out = []
-        for entry in meal_plan.get("items", []):
-            item_id = str(entry.get("id", "")).upper()
-            servings = float(entry.get("servings", 1) or 1)
-            item = on_menu.get(item_id)
-            if item is None:
-                problems.append(f"{meal}: item id {item_id!r} is not on the {hall} {meal} menu for {day}. "
-                                "Only use ids returned by get_menu/search_items for that hall and meal.")
-                continue
-            bad = allergy_conflicts(item, codes)
-            if bad:
-                problems.append(f"{meal}: {item['name']} conflicts with allergies {bad}. Remove it.")
-            if not diet_ok(item, prefs["diet"]):
-                problems.append(f"{meal}: {item['name']} doesn't fit the diet {prefs['diet']}. Remove it.")
-            if not 0.25 <= servings <= 4:
-                problems.append(f"{meal}: servings for {item['name']} must be between 0.25 and 4.")
-            items_out.append({**compact(item), "servings": servings})
-            all_entries.append({"id": item["id"], "servings": servings})
         if meta["status"] != "ok":
             problems.append(f"{meal}: {hall} has no {meal} menu ({meta['status']}). Pick another hall.")
-        meal_totals = sum_nutrition([{"id": i["id"], "servings": i["servings"]} for i in items_out],
-                                    day.isoformat())["totals"] if items_out else {}
+        items_out = check_items(meal_plan.get("items", []), hall, meal, on_menu, meal)
+        all_entries.extend({"id": i["id"], "servings": i["servings"]} for i in items_out)
+
+        alternatives = []
+        for n, alt in enumerate(meal_plan.get("alternatives") or [], 1):
+            try:
+                alt_hall = normalize_hall(alt.get("hall") or hall)
+            except ValueError as exc:
+                problems.append(str(exc))
+                continue
+            alt_menu = on_menu if alt_hall == hall else {
+                i["id"].upper(): i for i in _menu(alt_hall, meal, day)[0]}
+            alt_items = check_items(alt.get("items", []), alt_hall, meal, alt_menu, f"{meal} swap {n}")
+            if alt_items:
+                alternatives.append({"hall": alt_hall, "items": alt_items, "note": alt.get("note", ""),
+                                     "totals": _totals(alt_items, day)})
         meals_out.append({"meal": meal, "hall": hall, "items": items_out,
-                          "reason": meal_plan.get("reason", ""), "totals": meal_totals})
+                          "reason": meal_plan.get("reason", ""), "totals": _totals(items_out, day),
+                          "alternatives": alternatives})
     if not meals_out:
         problems.append("The plan has no meals.")
     totals = sum_nutrition(all_entries, day.isoformat())
-    goal = prefs.get("daily_protein_goal_g")
+    # A daily goal only makes sense for a full-day plan, not "just plan dinner".
+    planned = {m["meal"] for m in meals_out}
+    covered = planned | ({"breakfast", "lunch"} if "brunch" in planned else set())
+    full_day = set(prefs.get("meals_to_plan") or config.MEALS) <= covered
+    goal = prefs.get("daily_protein_goal_g") if full_day else None
     result = {
         "date": day.isoformat(),
         "goal": plan.get("goal", ""),
@@ -529,14 +613,18 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
         "items_missing_nutrition": totals["items_missing_nutrition"],
         "protein_goal_g": goal,
         "protein_gap_g": max(0, round(goal - totals["totals"]["protein_g"])) if goal else None,
+        "full_day": full_day,
         "adaptations": plan.get("adaptations", []),
         "tips": plan.get("tips", []),
+        "cheat_day": is_cheat_day(day, prefs),
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
     return result, problems
 
 
-def submit_plan(plan: dict) -> dict:
+def submit_plan(plan: dict | None = None, **fields) -> dict:
+    """Accepts the plan as one dict or as keyword fields (date=..., meals=...)."""
+    plan = {**(plan or {}), **fields}
     result, problems = validate_plan(plan)
     if problems:
         return {"status": "rejected", "problems": problems,

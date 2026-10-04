@@ -17,7 +17,7 @@ MEAL_EMOJI = {"breakfast": "🥣", "brunch": "🥞", "lunch": "🥗", "dinner": 
 
 
 def _item_names(meal: dict, limit: int = 2) -> str:
-    names = [i["name"] for i in meal["items"]]
+    names = [i["name"] + (" 🍪" if i.get("treat") else "") for i in meal["items"]]
     text = " + ".join(names[:limit])
     return text + (f" +{len(names) - limit}" if len(names) > limit else "")
 
@@ -26,6 +26,8 @@ def plan_message(plan: dict) -> tuple[str, str]:
     """(title, body). The first lines are what shows on the lock screen."""
     day = date.fromisoformat(plan["date"])
     title = f"🍽️ {config.APP_NAME} · {day.strftime('%a %b')} {day.day}"
+    if plan.get("cheat_day"):
+        title += " · cheat day 🎉"
     t = plan["totals"]
     lines = [f"{MEAL_EMOJI.get(m['meal'], '🍴')} {m['meal'].replace('_', ' ').title()} @ {m['hall']}: "
              f"{_item_names(m)}" for m in plan["meals"]]

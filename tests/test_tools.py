@@ -115,6 +115,35 @@ def test_submit_plan_accepts_valid_plan_and_remembers_it(prefs):
     assert T.get_meal_history(days=3650)["recent_plans"][0]["date"] == SAMPLE_DATE
 
 
+def test_submit_plan_accepts_keyword_fields_like_the_agent_sends(prefs):
+    prefs()
+    item = _first("West", "dinner")
+    res = T.submit_plan(date=SAMPLE_DATE, headline="x", meals=[
+        {"meal": "dinner", "hall": "West", "items": [{"id": item["id"]}], "reason": "r"}])
+    assert res["status"] == "accepted", res.get("problems")
+
+
+def test_partial_day_plan_is_not_judged_against_the_daily_goal(prefs):
+    prefs(daily_protein_goal_g=120)
+    item = _first("East", "dinner")
+    plan = T.submit_plan(date=SAMPLE_DATE, headline="x", meals=[
+        {"meal": "dinner", "hall": "East", "items": [{"id": item["id"]}], "reason": "r"}])["plan"]
+    assert plan["full_day"] is False
+    assert plan["protein_goal_g"] is None and plan["protein_gap_g"] is None
+
+
+def test_every_tool_accepts_its_schema_fields():
+    """Each schema property must be a keyword the Python function accepts (the bug the agent found)."""
+    import inspect
+
+    from src.agent import TOOL_SPECS
+    for name, _, schema, fn, _ in TOOL_SPECS:
+        params = inspect.signature(fn).parameters
+        takes_kwargs = any(p.kind is p.VAR_KEYWORD for p in params.values())
+        for prop in schema.get("properties", {}):
+            assert prop in params or takes_kwargs, f"{name} doesn't accept {prop!r}"
+
+
 def test_update_prefs_rejects_unknown_keys(prefs):
     prefs()
     assert T.update_prefs({"favourite_colour": "red"})["status"] == "error"
@@ -127,3 +156,62 @@ def test_allergy_keywords_catch_unlabeled_items():
     assert T.allergy_conflicts(item, T.allergen_codes(["peanuts"])) == ["peanuts"]
     eggplant = {"name": "Eggplant Parm", "description": "", "ingredients": "", "allergens": []}
     assert T.allergy_conflicts(eggplant, T.allergen_codes(["eggs"])) == []
+
+
+# --- the "human" features: blacklist, favorites, treats, swaps, cheat days ------------------
+
+def test_never_eat_is_hard_blocked_in_search_and_checker(prefs):
+    prefs()
+    target = _first("West", "dinner")
+    word = target["name"].split()[-1]
+    prefs(never_eat=[word])
+    res = T.search_items("dinner", hall="West", date=SAMPLE_DATE, limit=40)
+    assert not any(word.lower() in i["name"].lower() for i in res["items"])
+    assert res["excluded_counts"].get("never_eat", 0) >= 1
+    checked = T.submit_plan(date=SAMPLE_DATE, headline="x", meals=[
+        {"meal": "dinner", "hall": "West", "items": [{"id": target["id"]}], "reason": "r"}])
+    assert checked["status"] == "rejected"
+    assert any("never-eat" in p for p in checked["problems"])
+
+
+def test_favorites_float_to_the_top_and_are_marked(prefs):
+    prefs(favorites=["yogurt"])
+    res = T.search_items("breakfast", date=SAMPLE_DATE, sort_by="calories_high", limit=40)
+    assert res["items"][0].get("favorite") is True
+    assert "yogurt" in res["items"][0]["name"].lower()
+
+
+def test_alternatives_are_checked_and_totaled(prefs):
+    prefs()
+    main, swap = (T.search_items("lunch", hall="East", date=SAMPLE_DATE, sort_by="protein")["items"][:2])
+    west = _first("West", "lunch")
+    plan = T.submit_plan(date=SAMPLE_DATE, headline="x", meals=[{
+        "meal": "lunch", "hall": "East", "items": [{"id": main["id"]}], "reason": "r",
+        "alternatives": [{"items": [{"id": swap["id"]}], "note": "if the line is long"},
+                         {"hall": "West", "items": [{"id": west["id"]}], "note": "if you're near West"}]}])
+    assert plan["status"] == "accepted", plan.get("problems")
+    alts = plan["plan"]["meals"][0]["alternatives"]
+    assert [a["hall"] for a in alts] == ["East", "West"]
+    assert alts[0]["totals"]["protein_g"] == round(swap["protein_g"])
+    # swaps don't count toward the day's totals
+    assert plan["plan"]["totals"]["protein_g"] == round(main["protein_g"])
+
+
+def test_a_bad_swap_gets_the_plan_rejected(prefs):
+    prefs()
+    main = _first("East", "lunch")
+    res = T.submit_plan(date=SAMPLE_DATE, headline="x", meals=[{
+        "meal": "lunch", "hall": "East", "items": [{"id": main["id"]}], "reason": "r",
+        "alternatives": [{"items": [{"id": "E000"}], "note": "made up"}]}])
+    assert res["status"] == "rejected" and "swap 1" in res["problems"][0]
+
+
+def test_treat_flag_and_cheat_day(prefs):
+    prefs(cheat_days=["Thursday"])  # 2026-10-01 is a Thursday
+    dessert = next(i for i in T.search_items("dinner", date=SAMPLE_DATE, limit=40, sort_by="calories_high")["items"]
+                   if i.get("treat"))
+    plan = T.submit_plan(date=SAMPLE_DATE, headline="x", meals=[
+        {"meal": "dinner", "hall": dessert["hall"], "items": [{"id": dessert["id"], "treat": True}], "reason": "r"}])
+    assert plan["status"] == "accepted", plan.get("problems")
+    assert plan["plan"]["cheat_day"] is True
+    assert plan["plan"]["meals"][0]["items"][0]["treat"] is True

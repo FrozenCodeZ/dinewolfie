@@ -34,7 +34,7 @@ html, body, .stMarkdown, p, li, label, input, textarea, button, [data-testid="st
 }
 [data-testid="stIconMaterial"], .material-symbols-rounded { font-family: 'Material Symbols Rounded' !important; }
 h1, h2, h3, .dw-word { font-family: 'Bricolage Grotesque', sans-serif; letter-spacing: -0.01em; }
-.block-container { padding-top: 3.2rem; max-width: 1280px; }
+.block-container { padding-top: 3.2rem; max-width: 1500px; }
 
 .dw-word { font-size: 3rem; font-weight: 800; color: var(--ink); line-height: 1; margin: 0; }
 .dw-word span { color: var(--red); }
@@ -77,13 +77,15 @@ h1, h2, h3, .dw-word { font-family: 'Bricolage Grotesque', sans-serif; letter-sp
   background: var(--steel); color: var(--ink); margin: .15rem .2rem 0 0; }
 
 /* the tray: the finished plan */
-.tray { background: var(--tray); border-radius: 22px; padding: 14px; box-shadow: inset 0 2px 0 rgba(255,255,255,.6); }
+.tray { background: var(--tray); border-radius: 22px; padding: 14px; box-shadow: inset 0 2px 0 rgba(255,255,255,.6);
+  container-type: inline-size; }
 .tray-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap;
   gap: .4rem; padding: .2rem .5rem .7rem; }
 .tray-title { margin: 0; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800;
   font-size: 1.35rem; color: var(--ink); }
 .tray-date { color: var(--muted); font-size: .9rem; }
-.wells { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.wells { display: grid; grid-template-columns: 1fr; gap: 12px; }
+@container (min-width: 700px) { .wells { grid-template-columns: repeat(var(--n, 3), 1fr); } }
 .well { background: var(--well); border-radius: 14px; padding: .8rem .9rem .9rem;
   box-shadow: inset 0 2px 6px rgba(31,36,48,.12); }
 .well-title { margin: 0 0 .35rem; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800;
@@ -94,6 +96,15 @@ h1, h2, h3, .dw-word { font-family: 'Bricolage Grotesque', sans-serif; letter-sp
 .food { margin: .45rem 0; }
 .food-name { font-weight: 700; color: var(--ink); line-height: 1.25; }
 .food-meta { font-size: .8rem; color: var(--muted); }
+.badge { font-size: .74rem; font-weight: 700; border-radius: 999px; padding: 0 .45rem; margin-left: .3rem;
+  vertical-align: 1px; white-space: nowrap; }
+.badge-treat { background: #FBE3EC; color: #8A1C44; }
+.badge-fav { background: #E3F1E8; color: var(--green); }
+.badge-cheat { background: #FBE3EC; color: #8A1C44; font-size: .82rem; padding: .1rem .6rem; }
+.swap { font-size: .82rem; color: var(--ink); background: var(--steel); border-radius: 10px;
+  padding: .4rem .55rem; margin-top: .45rem; }
+.swap b { font-weight: 700; }
+.swap .food-meta { margin-top: .1rem; }
 .why { font-size: .85rem; color: var(--ink); border-top: 1px dashed var(--tray); margin-top: .55rem;
   padding-top: .45rem; }
 .meal-tot { font-size: .8rem; color: var(--muted); margin-top: .35rem; }
@@ -107,8 +118,8 @@ h1, h2, h3, .dw-word { font-family: 'Bricolage Grotesque', sans-serif; letter-sp
 .note-adapt { color: var(--amber); }
 .empty { border: 2px dashed var(--tray); border-radius: 22px; padding: 2.2rem 1.4rem; color: var(--muted);
   text-align: center; }
-.reply { background: var(--paper); border-radius: 14px; padding: .8rem 1rem; margin-top: 12px;
-  border-left: 4px solid var(--red); }
+.st-key-reply { background: var(--paper); border-radius: 14px; padding: .8rem 1rem .2rem;
+  margin-top: 12px; border-left: 4px solid var(--red); }
 @media (prefers-reduced-motion: no-preference) {
   .tk-new { animation: drop .35s ease-out; }
   @keyframes drop { from { transform: translateY(-6px); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -236,15 +247,30 @@ def tray_html(plan: dict) -> str:
             else:
                 nut = (f"{round((item['protein_g'] or 0) * item['servings'])} g protein, "
                        f"{round(item['calories'] * item['servings'])} kcal")
-            foods.append(f'<div class="food"><div class="food-name">{e(serv + item["name"])}</div>'
+            badges = ""
+            if item.get("treat"):
+                badges += '<span class="badge badge-treat">treat</span>'
+            if item.get("favorite"):
+                badges += '<span class="badge badge-fav">♥ favorite</span>'
+            foods.append(f'<div class="food"><div class="food-name">{e(serv + item["name"])}{badges}</div>'
                          f'<div class="food-meta">{e(item["station"])} · {nut}</div></div>')
+        swaps = []
+        for alt in meal.get("alternatives") or []:
+            names = " + ".join(e((f"{i['servings']:g}× " if i["servings"] != 1 else "") + i["name"])
+                               for i in alt["items"])
+            where = f" at {e(alt['hall'])}" if alt["hall"] != meal["hall"] else ""
+            at = alt.get("totals") or {}
+            swaps.append(f'<div class="swap">Or swap{where}: <b>{names}</b>'
+                         f'<div class="food-meta">{e(alt.get("note", ""))} · {at.get("protein_g", 0)} g protein, '
+                         f'{at.get("calories", 0)} kcal</div></div>')
         t = meal.get("totals") or {}
         wells.append(
             f'<div class="well"><div class="well-title">{e(MEAL_LABEL.get(meal["meal"], meal["meal"]))}'
             f'<span class="hall hall-{e(meal["hall"])}">{e(meal["hall"])}</span></div>{"".join(foods)}'
             f'<div class="meal-tot">{t.get("protein_g", 0)} g protein · {t.get("calories", 0)} kcal</div>'
-            f'<div class="why">{e(meal.get("reason", ""))}</div></div>')
+            f'<div class="why">{e(meal.get("reason", ""))}</div>{"".join(swaps)}</div>')
 
+    cheat = '<span class="badge badge-cheat">cheat day</span> ' if plan.get("cheat_day") else ""
     tot = plan["totals"]
     goal = plan.get("protein_goal_g")
     if goal:
@@ -265,8 +291,8 @@ def tray_html(plan: dict) -> str:
     for tip in plan.get("tips", []):
         notes.append(f'<div class="note">💡 {e(tip)}</div>')
     return (f'<div class="tray"><div class="tray-head"><div class="tray-title">{e(plan.get("headline") or "Your day")}</div>'
-            f'<span class="tray-date">{day.strftime("%A, %B")} {day.day}</span></div>'
-            f'<div class="wells">{"".join(wells)}</div>'
+            f'<span class="tray-date">{cheat}{day.strftime("%A, %B")} {day.day}</span></div>'
+            f'<div class="wells" style="--n:{max(1, len(wells))}">{"".join(wells)}</div>'
             f'<div class="totals"><div class="tot-line"><span><b>{tot["protein_g"]}</b> g protein</span>'
             f'<span><b>{tot["calories"]}</b> kcal</span><span><b>{tot["carbs_g"]}</b> g carbs</span>'
             f'<span><b>{tot["fat_g"]}</b> g fat</span></div>{bar}{"".join(notes)}</div></div>')
@@ -295,7 +321,18 @@ with st.sidebar:
                                    int(prefs.get("daily_calorie_goal") or 0), step=50)
         halls = ["No preference", "East", "West"]
         fav = st.selectbox("Favorite hall", halls, halls.index(prefs.get("favorite_hall") or "No preference"))
-        dislikes = st.text_input("Dislikes (comma separated)", ", ".join(prefs.get("dislikes", [])))
+        never_eat = st.text_input("Never eat (blacklist)", ", ".join(prefs.get("never_eat") or []),
+                                  help="Comma separated. Strict, like an allergy: the checker rejects any plan "
+                                       "that includes these.")
+        dislikes = st.text_input("Dislikes (avoid if possible)", ", ".join(prefs.get("dislikes", [])))
+        favorites = st.text_input("Favorites", ", ".join(prefs.get("favorites") or []),
+                                  help="Comma separated. Picked first when they're on the menu.")
+        treats = st.select_slider("Treats", options=list(T.TREAT_LEVELS),
+                                  value=prefs.get("treats") if prefs.get("treats") in T.TREAT_LEVELS
+                                  else "sometimes")
+        weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        cheat_days = st.multiselect("Cheat days", weekdays,
+                                    [d for d in prefs.get("cheat_days") or [] if d in weekdays])
         meals = st.multiselect("Meals to plan", ["breakfast", "lunch", "dinner", "late_night"],
                                prefs.get("meals_to_plan") or ["breakfast", "lunch", "dinner"])
         if st.form_submit_button("Save memory"):
@@ -303,6 +340,9 @@ with st.sidebar:
                           "daily_protein_goal_g": protein or None, "daily_calorie_goal": calories or None,
                           "favorite_hall": None if fav == "No preference" else fav,
                           "dislikes": [d.strip() for d in dislikes.split(",") if d.strip()],
+                          "never_eat": [d.strip() for d in never_eat.split(",") if d.strip()],
+                          "favorites": [d.strip() for d in favorites.split(",") if d.strip()],
+                          "treats": treats, "cheat_days": cheat_days,
                           "meals_to_plan": meals or ["breakfast", "lunch", "dinner"]})
             T.write_prefs(prefs)
             st.toast("Memory saved")
@@ -341,7 +381,17 @@ EXAMPLES = {
     "Bulking at East": "Bulking: as much protein as possible today, East only.",
     "Cutting under 1,800 kcal": "Cutting: under 1,800 kcal total today with at least 100 g protein.",
     "Light vegan dinner": "Just plan dinner tonight: something light and vegan.",
+    "Cheat day": "It's my cheat day! Plan something fun, but keep it vegetarian.",
+    "Comfort food": "Rough day. I want warm comfort food today, still around 100 g protein.",
 }
+
+
+def remember(key: str, value: str) -> None:
+    current = T.read_prefs()
+    values = list(current.get(key) or [])
+    if value.lower() not in (v.lower() for v in values):
+        values.append(value)
+    T.update_prefs({key: values}, reason="feedback button")
 
 
 def use_example() -> None:
@@ -380,7 +430,7 @@ with tab_plan:
         go = st.button("Plan my day", type="primary", use_container_width=True)
     st.pills("Or try one", list(EXAMPLES), key="example", on_change=use_example)
 
-    left, right = st.columns([5, 7], gap="large")
+    left, right = st.columns([4, 6], gap="large")
     with left:
         st.markdown("#### Agent at work")
         rail_slot = st.empty()
@@ -404,7 +454,8 @@ with tab_plan:
         if st.session_state.error:
             st.error(st.session_state.error)
         if st.session_state.reply:
-            st.markdown(f'<div class="reply">{e(st.session_state.reply)}</div>', unsafe_allow_html=True)
+            with st.container(key="reply"):
+                st.markdown(st.session_state.reply)
         if st.session_state.stats and st.session_state.plan:
             s = st.session_state.stats
             m1, m2, m3 = st.columns(3)
@@ -423,18 +474,34 @@ with tab_plan:
                 title, body = notify.plan_message(st.session_state.plan)
                 st.markdown(f"**{title}**")
                 st.text(body)
+            with st.expander("Teach DineWolfie: love it or never again"):
+                st.caption("Saved to memory. Favorites get picked first; never-again items are blocked for good.")
+                seen = set()
+                for meal in st.session_state.plan["meals"]:
+                    for item in meal["items"]:
+                        if item["name"] in seen:
+                            continue
+                        seen.add(item["name"])
+                        n1, n2, n3 = st.columns([6, 2, 3])
+                        n1.markdown(f"{item['name']}")
+                        if n2.button("Love it", key=f"love-{item['id']}", use_container_width=True):
+                            remember("favorites", item["name"])
+                            st.toast(f"Added {item['name']} to favorites")
+                        if n3.button("Never again", key=f"ban-{item['id']}", use_container_width=True):
+                            remember("never_eat", item["name"])
+                            st.toast(f"{item['name']} is blocked from now on")
             if st.session_state.session_id:
                 with st.form("followup", clear_on_submit=True):
                     follow = st.text_input("Change something", placeholder="e.g. swap dinner to East, "
                                                                           "or I don't eat eggs")
                     if st.form_submit_button("Update the plan") and follow.strip():
-                        st.session_state.followup = follow.strip()
+                        st.session_state.pending_followup = follow.strip()
                         st.rerun()
 
     if go and st.session_state.goal_box.strip():
         start_run(st.session_state.goal_box.strip(), plan_date, None, rail_slot, tray_slot)
-    if st.session_state.get("followup"):
-        follow = st.session_state.pop("followup")
+    if st.session_state.get("pending_followup"):
+        follow = st.session_state.pop("pending_followup")
         start_run(follow, plan_date, st.session_state.session_id, rail_slot, tray_slot)
 
 

@@ -4,7 +4,11 @@
 
 Tell it something like *"I'm vegetarian, aiming for 120 g protein today, and I'll be near West at lunch."* DineWolfie reads your saved preferences, pulls today's real menus for both halls, compares them, adds up the nutrition in code, works around anything that's missing, and hands you breakfast, lunch and dinner: which hall, which items, and why. Every morning it can also do this on its own and push the plan to your phone.
 
-![DineWolfie architecture](docs/architecture.svg)
+![DineWolfie planning a day: live agent steps on the left, the plan tray on the right](docs/screenshots/4-plan-tray.png)
+
+| The agent changes course when West hasn't posted dinner | How it works |
+|---|---|
+| ![Adaptation](docs/screenshots/3-adapts.png) | ![Architecture](docs/architecture.svg) |
 
 Built for the AI Community @ SBU Internal Competition 2026 (Agentic AI).
 
@@ -20,8 +24,17 @@ Built for the AI Community @ SBU Internal Competition 2026 (Agentic AI).
 | **Observes** | Every tool returns a `status` (`ok`, `no_menu_posted`, `no_matches`, `error`, `rejected`) that it must read. |
 | **Adapts** | Missing menu → other hall. Filter leaves nothing → other station. Goal unreachable → closest plan plus the exact gap and a fix. Network down → cached menus. Each change is logged (`log_adaptation`) and shown highlighted. |
 | **Verifies itself** | `submit_plan` rejects any item that isn't on that hall's menu that day or that breaks your allergies/diet. The agent has to fix the plan and resubmit. |
-| **Remembers** | `prefs.json` (diet, allergies, goals, dislikes) and `history.json` (past plans, for variety). It updates memory when you state a lasting preference. |
+| **Remembers** | `prefs.json` (diet, allergies, goals, never-eat list, favorites, treats, cheat days) and `history.json` (past plans, for variety). It updates memory when you state a lasting preference, or when you tap **Love it** / **Never again**. |
 | **Autonomous** | A scheduled morning run plans your day and pushes it to your phone with no human in the loop. |
+
+## Feels like a friend, not a calculator
+
+* **Swaps for every meal.** Each meal comes with an alternative with similar protein ("if the Grill line is long"), sometimes at the other hall. Swaps go through the same checker.
+* **Treats and cheat days.** Set treats to never / sometimes / often and pick cheat days. When it fits, DineWolfie adds a treat (tagged on the tray). On a cheat day it relaxes calories but never your allergies, diet or blacklist.
+* **Never-eat blacklist vs. dislikes.** Dislikes are avoided when possible; never-eat foods are blocked as strictly as allergies.
+* **Favorites.** If something you love is on the menu, it's picked first. If it isn't, the agent tells you and finds a stand-in.
+* **One-tap feedback.** Under each plan: **Love it** adds to favorites, **Never again** blacklists the item.
+* **Follow-ups.** "Make dinner lighter" or "remember I'm allergic to soy": the agent continues the same conversation, updates memory if needed, and re-plans.
 
 The model decides; the code calculates. Every number you see comes from Python, never from the model, so it can't make up nutrition facts.
 
