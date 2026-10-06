@@ -1,6 +1,11 @@
 """Download menus from Nutrislice and cache them on disk.
 
-Politeness rules (see README "Data"):
+Live fetching is OFF by default (config.LIVE_FETCH): we have asked SBU Campus Dining for
+permission and have not heard back. While it is off, only saved menus are used.
+
+Politeness rules when it is on (see README "Data"):
+  * Any refusal or rate limit (HTTP 401/403/429 or a Retry-After header) stops ALL
+    fetching for the rest of the run; nothing is retried.
   * One request returns a whole week for one station, and we cache it.
   * A cached week is re-used all day; we refresh it at most once per day.
   * Weeks that are fully in the past are never fetched again.
@@ -32,11 +37,23 @@ class Station:
 
 
 _last_request_at = 0.0
+# Set the first time Nutrislice refuses or rate-limits us. After that, no request is sent
+# again until the program restarts.
+_stopped_reason: str | None = None
 
 
 def _get_json(url: str) -> dict | list:
-    """GET a URL politely (rate-limited, identified User-Agent)."""
-    global _last_request_at
+    """GET a URL politely (rate-limited, identified User-Agent).
+
+    This is the ONLY place that contacts Nutrislice. It refuses unless live fetching is
+    switched on (config.LIVE_FETCH), and it stops for good on any refusal or rate limit.
+    """
+    global _last_request_at, _stopped_reason
+    if not config.LIVE_FETCH:
+        raise FetchError("Live fetching from Nutrislice is turned off (DINEWOLFIE_LIVE_FETCH is not 'on'), "
+                         "so only saved menus are used.")
+    if _stopped_reason:
+        raise FetchError(f"Not contacting Nutrislice again: {_stopped_reason}")
     wait = config.POLITE_DELAY_S - (time.monotonic() - _last_request_at)
     if wait > 0:
         time.sleep(wait)
@@ -45,12 +62,17 @@ def _get_json(url: str) -> dict | list:
                             timeout=config.REQUEST_TIMEOUT_S)
     finally:
         _last_request_at = time.monotonic()
-    if resp.status_code in (401, 403, 429):
-        # Being blocked or rate-limited: stop, don't retry or work around it.
+    if resp.status_code in (401, 403, 429) or resp.headers.get("Retry-After"):
+        # Being blocked or rate-limited: stop everything, don't retry or work around it.
+        _stopped_reason = f"it refused or rate-limited a request (HTTP {resp.status_code})."
         raise FetchError(f"Nutrislice refused the request (HTTP {resp.status_code}). "
-                         "Stopping instead of retrying.")
+                         "Stopped all fetching instead of retrying.")
     resp.raise_for_status()
     return resp.json()
+
+
+def fetching_stopped() -> bool:
+    return _stopped_reason is not None
 
 
 def week_start(d: date) -> date:
@@ -152,6 +174,8 @@ def fetch_hall_day(hall: str, day: date, offline: bool = False) -> dict:
             week, source = fetch_station_week(station, day, offline=offline)
         except FetchError as exc:
             out["errors"].append(str(exc))
+            # After a refusal/rate limit, the remaining stations come from cache only.
+            offline = offline or fetching_stopped()
             continue
         out["sources"][station.name] = source
         for raw_day in week.get("days", []):

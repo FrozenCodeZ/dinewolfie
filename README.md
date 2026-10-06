@@ -20,7 +20,7 @@ Built for the AI Community @ SBU Internal Competition 2026 (Agentic AI).
 |---|---|
 | **Goal-directed** | Works toward your goal for the whole day (protein, calories, diet, location), not one question. |
 | **Plans** | Writes a step list (`make_plan`) before acting and rewrites it when it changes course. |
-| **Uses real tools** | 11 tools: live Nutrislice menus, search, hall comparison, nutrition math, memory, plan checker. |
+| **Uses real tools** | 11 tools: real SBU Nutrislice menus (saved copies), search, hall comparison, nutrition math, memory, plan checker. |
 | **Observes** | Every tool returns a `status` (`ok`, `no_menu_posted`, `no_matches`, `error`, `rejected`) that it must read. |
 | **Adapts** | Missing menu → other hall. Filter leaves nothing → other station. Goal unreachable → closest plan plus the exact gap and a fix. Network down → cached menus. Each change is logged (`log_adaptation`) and shown highlighted. |
 | **Verifies itself** | `submit_plan` rejects any item that isn't on that hall's menu that day or that breaks your allergies/diet. The agent has to fix the plan and resubmit. |
@@ -115,7 +115,7 @@ python -m src.cli --simulate offline "plan my day"
 
 In the web app the same switches are in the sidebar under **Demo: break things on purpose**.
 
-**Offline / judges' mode:** `--sample` (or `DINEWOLFIE_DATA_MODE=sample` in `.env`) uses the real menus saved in `data/sample/`, so it works without network access to Nutrislice.
+**Menu data mode:** by default (`DINEWOLFIE_DATA_MODE=sample`, or `--sample`) DineWolfie uses the real menus saved in `data/sample/`, so it works without network access to Nutrislice. Contacting Nutrislice is switched off (see Data below).
 
 **Tests** (offline, no Claude calls):
 
@@ -162,7 +162,7 @@ You ──goal──▶ Claude (Agent SDK loop) ──tools──▶ Nutrislice 
 
 ## Data
 
-Menu data comes from Stony Brook University's Nutrislice menus (`stonybrook.api.nutrislice.com`), used with permission from SBU Campus Dining. DineWolfie is polite about it: one request covers a whole week for one station, results are cached on disk, a station is fetched at most once a day, requests are spaced out and identify the project, and if the server refuses a request we stop instead of retrying. Nutrition values are Nutrislice's per-serving numbers. When an item has none, DineWolfie says "nutrition not listed" instead of guessing.
+Menu data comes from Stony Brook University's Nutrislice menus (`stonybrook.api.nutrislice.com`). We have asked SBU Campus Dining for permission to fetch them automatically and have not heard back yet, so **live fetching is off by default** (`DINEWOLFIE_LIVE_FETCH=off`): DineWolfie never contacts Nutrislice and runs on saved menus. If permission is granted and it is switched on, DineWolfie is polite about it: one request covers a whole week for one station, results are cached on disk, a station is fetched at most once a day, requests are spaced out and identify the project, and if the server refuses or rate-limits any request, all fetching stops at once instead of retrying. Nutrition values are Nutrislice's per-serving numbers. When an item has none, DineWolfie says "nutrition not listed" instead of guessing.
 
 ## Notes
 

@@ -18,7 +18,7 @@ Pitch it like you're talking to someone who has never heard of the project and h
 | 1:35 to 1:45 | Zoom on the tray: the swap box under lunch, the treat tag, then open **Teach DineWolfie** and tap **Never again** on one item | "It's not a calculator, it's a friend who knows the dining halls. Every meal comes with a swap in case the line is long. It slips in a treat when my goal allows. And if I never want to see an item again, one tap and it's blocked for good." |
 | 1:45 to 2:05 | Sidebar: turn on **West dinner not posted**. Run again. Zoom on the amber **Changed course** ticket. | "Things go wrong in real life. Here West hasn't posted dinner. The agent notices, switches dinner to East, and tells me exactly what it changed and why. And when my protein goal isn't reachable, it tells me how many grams short I am and how to fix it." |
 | 2:05 to 2:20 | Phone lock screen with the 8 AM notification | "And I don't even have to ask. Every morning at 8, it runs by itself and sends the plan to my phone." |
-| 2:20 to 2:40 | **How it works** tab (architecture diagram) | "Under the hood: Claude, through the Claude Agent SDK, runs the loop. It plans, uses 11 tools on live Nutrislice data and my memory, observes every result, adapts, and finishes with a verified plan." |
+| 2:20 to 2:40 | **How it works** tab (architecture diagram) | "Under the hood: Claude, through the Claude Agent SDK, runs the loop. It plans, uses 11 tools on real SBU menu data and my memory, observes every result, adapts, and finishes with a verified plan." |
 | 2:40 to 3:00 | Back to the tray | "Next: more campus locations, calendar-aware routing to the hall nearest your class, and group plans. DineWolfie: stop scrolling, start eating." |
 
 **Tips**

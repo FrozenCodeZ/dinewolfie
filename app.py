@@ -351,8 +351,11 @@ with st.sidebar:
 
     st.markdown("### Menu data")
     mode = st.radio("Source", ["live", "sample"], index=0 if config.DATA_MODE == "live" else 1,
-                    horizontal=True, help="live: today's Nutrislice menus, cached on disk and fetched at most "
-                                          "once per station per day. sample: a saved real day, works offline.")
+                    horizontal=True, help="sample: saved real menus, works offline. live: today's menus from the "
+                                          "cache on this computer; Nutrislice is only contacted if "
+                                          "DINEWOLFIE_LIVE_FETCH=on (off until SBU Dining gives permission).")
+    if not config.LIVE_FETCH:
+        st.caption("Live fetching from Nutrislice is off. Only menus saved on this computer are used.")
     if mode != config.DATA_MODE:
         config.DATA_MODE = mode
         T.clear_cache()

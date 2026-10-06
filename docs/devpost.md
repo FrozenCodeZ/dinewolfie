@@ -42,7 +42,7 @@ Plus **memory** that persists across runs and **autonomy**: the scheduled mornin
 
 * **Claude Agent SDK (Python)** runs the agent loop, with my tools served from an in-process MCP server. It runs on my Claude plan.
 * **Python** for the data pipeline, tools, plan checker and nutrition math.
-* **SBU's Nutrislice menu data** (used with permission from Campus Dining), cached on disk and fetched at most once a day per station.
+* **SBU's Nutrislice menu data.** Permission from Campus Dining has been requested; until it is granted, live fetching is off and DineWolfie runs on saved menus.
 * **Streamlit** for the web app, including the live "agent at work" ticket rail.
 * **ntfy** for push notifications to my iPhone.
 * **Windows Task Scheduler** for the 8 AM run.

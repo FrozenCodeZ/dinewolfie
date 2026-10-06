@@ -66,6 +66,7 @@ Headers without a meal word ("Grill", "Deli Breads", "Salad Bar") fall back to t
 
 * A week for one station is about 300 KB of JSON. One hall-day needs about 17 requests the first time, then everything comes from disk.
 * Cache layout: `data/menus/<week start>/<hall>/<menu_type_id>-<slug>.json`, each wrapped as `{fetched_at, url, data}`.
+* Live fetching is off unless `DINEWOLFIE_LIVE_FETCH=on` (permission from SBU Campus Dining has been requested, not yet granted). Any refusal or rate limit (HTTP 401/403/429 or Retry-After) stops all fetching for the rest of the run.
 * A cached week is reused all day. It is refreshed at most once per day (menus do change), and weeks fully in the past are never refetched.
 * Requests are spaced 0.4 s apart and identify the project in the User-Agent. HTTP 401/403/429 stops fetching instead of retrying.
 * The committed `data/sample/` days are normalized (not raw), so tests and demos run offline.

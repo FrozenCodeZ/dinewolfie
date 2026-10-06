@@ -101,8 +101,13 @@ SAMPLE_DIR = DATA_DIR / "sample"
 PREFS_FILE = Path(os.getenv("DINEWOLFIE_PREFS", ROOT / "prefs.json"))
 HISTORY_FILE = Path(os.getenv("DINEWOLFIE_HISTORY", ROOT / "history.json"))
 
-# live | sample
-DATA_MODE = os.getenv("DINEWOLFIE_DATA_MODE", "live").strip().lower()
+# sample = the menus saved in data/sample/ (default)
+# live   = today's menus, from the cache in data/menus/ (and from Nutrislice only if LIVE_FETCH is on)
+DATA_MODE = os.getenv("DINEWOLFIE_DATA_MODE", "sample").strip().lower()
+
+# Contacting Nutrislice is OFF unless DINEWOLFIE_LIVE_FETCH=on. Only turn it on once SBU
+# Campus Dining has given permission. When off, no request is ever sent.
+LIVE_FETCH = os.getenv("DINEWOLFIE_LIVE_FETCH", "off").strip().lower() in ("on", "1", "true", "yes")
 
 # --- Agent -------------------------------------------------------------------
 MODEL = os.getenv("DINEWOLFIE_MODEL", "claude-opus-5-5").strip() or None
