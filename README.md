@@ -59,7 +59,23 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Mac/Linux: use `source .venv/bin/activate` and `cp .env.example .env`.
+### Setup on a Mac (Terminal)
+
+macOS's built-in `python3` is often 3.9, which is too old. Check with `python3 --version`; if it's below 3.11, install Python from https://www.python.org/downloads/ (or `brew install python@3.13`).
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash      # installs Claude Code
+claude auth login                                    # sign in with your Claude plan
+git clone https://github.com/<your-username>/dinewolfie.git
+cd dinewolfie
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+streamlit run app.py
+```
+
+The 8 AM scheduler script is Windows-only. On a Mac, send a plan to your phone on demand with `python -m src.morning_run --force`.
 
 If PowerShell refuses to run `Activate.ps1`, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
 
