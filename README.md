@@ -51,7 +51,7 @@ The model decides; the code calculates. Every number you see comes from Python, 
 ## Setup (Windows PowerShell)
 
 ```powershell
-git clone https://github.com/<your-username>/dinewolfie.git
+git clone https://github.com/FrozenCodeZ/dinewolfie.git
 cd dinewolfie
 python -m venv .venv
 .venv\Scripts\Activate.ps1
@@ -66,7 +66,7 @@ macOS's built-in `python3` is often 3.9, which is too old. Check with `python3 -
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash      # installs Claude Code
 claude auth login                                    # sign in with your Claude plan
-git clone https://github.com/<your-username>/dinewolfie.git
+git clone https://github.com/FrozenCodeZ/dinewolfie.git
 cd dinewolfie
 python3 -m venv .venv
 source .venv/bin/activate

@@ -74,7 +74,7 @@ Every student on a meal plan who eats at East or West faces this choice two or t
 
 ## Try it out
 
-* GitHub: [link to your repo]
+* GitHub: https://github.com/FrozenCodeZ/dinewolfie
 * Setup and run instructions are in the README. `python -m src.cli --sample "plan my day"` runs on saved real menus, without network access to Nutrislice.
 
 ## Gallery captions (files in docs/screenshots/)
