@@ -1,0 +1,16 @@
+{
+  "name": "Sam",
+  "diet": ["vegetarian"],
+  "allergies": [],
+  "daily_protein_goal_g": 110,
+  "daily_calorie_goal": null,
+  "max_calories_per_meal": null,
+  "favorite_hall": "East",
+  "dislikes": ["olives"],
+  "never_eat": [],
+  "favorites": ["oatmeal"],
+  "treats": "sometimes",
+  "cheat_days": ["Saturday"],
+  "meals_to_plan": ["breakfast", "lunch", "dinner"],
+  "notes": []
+}

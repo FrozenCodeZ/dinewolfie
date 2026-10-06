@@ -6,7 +6,7 @@ data/*
 !data/sample/
 data/sample/*
 !data/sample/*.json
-prefs.local.json
+prefs.json
 history.json
 
 # python

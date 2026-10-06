@@ -87,7 +87,7 @@ claude auth login
 
 If `claude` isn't found, install Claude Code from https://code.claude.com, or run `& "$env:USERPROFILE\.local\bin\claude.exe" auth login`.
 
-Edit `prefs.json` (or use the sidebar in the app) with your own diet, allergies and goals.
+Your memory lives in `prefs.json`, which is created the first time you save it in the sidebar and is never committed (it is in `.gitignore`). To start from an example, copy `prefs.example.json` to `prefs.json`; its values are made up.
 
 ## Run it
 
