@@ -120,7 +120,8 @@ def _menu(hall: str, meal: str, day: date) -> tuple[list[dict], dict]:
         hit = [m for m in item["meals"] if m in wanted]
         if hit:
             # Show the station that serves this item at this meal.
-            selected.append({**item, "station": item.get("station_by_meal", {}).get(hit[0], item["station"])})
+            selected.append({**item, "station": item.get("station_by_meal", {}).get(hit[0], item["station"]),
+                             "section": item.get("section_by_meal", {}).get(hit[0], item.get("section", ""))})
     status = "ok" if selected else "no_menu_posted"
     return selected, {**meta, "status": status}
 
@@ -338,6 +339,12 @@ def get_meal_history(days: int = 3) -> dict:
             for h in recent[-5:]]
     return {"status": "ok", "recent_plans": slim,
             "summary": f"Found {len(slim)} recent plan(s) in memory." if slim else "No recent plans in memory."}
+
+
+def menu_items(hall: str, meal: str, date: str | None = None) -> list[dict]:
+    """Full items for one hall + meal, in Nutrislice's order (for the menu browser)."""
+    items, _ = _menu(normalize_hall(hall), normalize_meal(meal), resolve_date(date))
+    return items
 
 
 def get_menu(hall: str, meal: str, date: str | None = None) -> dict:

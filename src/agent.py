@@ -350,7 +350,8 @@ async def run_agent_async(goal: str, plan_date: date | None = None,
 def _explain_error(exc: Exception) -> str:
     text = str(exc)
     if "Not logged in" in text or "/login" in text:
-        return ("Claude Code isn't logged in on this computer. Open PowerShell and run:  claude auth login  "
+        return ("Claude Code isn't signed in where this app is running. On your own computer, open a terminal "
+                "(PowerShell on Windows, Terminal on Mac) and run:  claude auth login  "
                 "(sign in with your Claude plan), then try again.")
     if "not found" in text.lower() and "claude" in text.lower():
         return "Claude Code isn't installed. See README > Setup."

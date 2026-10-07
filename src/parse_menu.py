@@ -124,9 +124,10 @@ def merge_duplicates(items: list[dict]) -> list[dict]:
     and remember which station serves it at each meal."""
     by_id: dict[str, dict] = {}
     for item in items:
-        kept = by_id.setdefault(item["id"], {**item, "meals": [], "station_by_meal": {}})
+        kept = by_id.setdefault(item["id"], {**item, "meals": [], "station_by_meal": {}, "section_by_meal": {}})
         for meal in item["meals"]:
             kept["station_by_meal"].setdefault(meal, item["station"])
+            kept["section_by_meal"].setdefault(meal, item["section"])
         kept["meals"] = sorted(set(kept["meals"]) | set(item["meals"]), key=config.ALL_MEALS.index)
     return list(by_id.values())
 

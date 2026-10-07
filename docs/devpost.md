@@ -4,11 +4,11 @@
 
 ## Tagline (one line)
 
-An AI agent that plans your whole day of eating at Stony Brook's East and West dining halls, around your goals, from today's real menus.
+An AI agent that plans your whole day of eating at Stony Brook's East and West dining halls, around your goals, using real SBU dining menu data.
 
 ## Overview
 
-DineWolfie is an AI agent for Stony Brook students who eat at East Side and West Side Dine-In. You tell it a goal in plain English, like "I'm vegetarian, aiming for 120 g protein, and I'll be near West at lunch." It reads your saved preferences, pulls today's real menus for both halls, compares them, does the nutrition math in code, works around anything that's missing, and hands you breakfast, lunch and dinner: which hall, which items, and why. Every morning it can also run on its own and push the plan to your phone.
+DineWolfie is an AI agent for Stony Brook students who eat at East Side and West Side Dine-In. You tell it a goal in plain English, like "I'm vegetarian, aiming for 120 g protein, and I'll be near West at lunch." It reads your saved preferences, pulls the real menus for both halls, compares them, does the nutrition math in code, works around anything that's missing, and hands you breakfast, lunch and dinner: which hall, which items, and why. Every morning it can also run on its own and push the plan to your phone.
 
 ## Problem
 
@@ -46,7 +46,7 @@ Plus **memory** that persists across runs and **autonomy**: the scheduled mornin
 * **Streamlit** for the web app, including the live "agent at work" ticket rail.
 * **ntfy** for push notifications to my iPhone.
 * **Windows Task Scheduler** for the 8 AM run.
-* **pytest** for 30 offline tests (parser, tools, checker, cache, notifications).
+* **pytest** for 45 offline tests (parser, tools, checker, cache, notifications).
 * **GitHub** for the code.
 
 ## Why I built it

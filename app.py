@@ -315,10 +315,10 @@ with st.sidebar:
                         "shellfish", "sesame"]
         allergies = st.multiselect("Allergies (never served)", allergy_opts,
                                    [a for a in prefs.get("allergies", []) if a in allergy_opts])
-        protein = st.number_input("Daily protein goal (g, 0 = none)", 0, 400,
-                                  int(prefs.get("daily_protein_goal_g") or 0), step=5)
-        calories = st.number_input("Daily calorie goal (0 = none)", 0, 6000,
-                                   int(prefs.get("daily_calorie_goal") or 0), step=50)
+        protein = st.slider("Daily protein goal (g, 0 = no goal)", 0, 300,
+                            min(300, int(prefs.get("daily_protein_goal_g") or 0)), step=5)
+        calories = st.slider("Daily calorie goal (kcal, 0 = no goal)", 0, 5000,
+                             min(5000, int(prefs.get("daily_calorie_goal") or 0)), step=50)
         halls = ["No preference", "East", "West"]
         fav = st.selectbox("Favorite hall", halls, halls.index(prefs.get("favorite_hall") or "No preference"))
         never_eat = st.text_input("Never eat (blacklist)", ", ".join(prefs.get("never_eat") or []),
@@ -430,7 +430,7 @@ with tab_plan:
     with g2:
         day_choice = st.radio("Plan for", ["Today", "Tomorrow"], horizontal=True)
         plan_date = date.today() + timedelta(days=1 if day_choice == "Tomorrow" else 0)
-        go = st.button("Plan my day", type="primary", use_container_width=True)
+        go = st.button("Plan my day", type="primary", width="stretch")
     st.pills("Or try one", list(EXAMPLES), key="example", on_change=use_example)
 
     left, right = st.columns([4, 6], gap="large")
@@ -467,13 +467,13 @@ with tab_plan:
             m3.metric("Seconds", s["seconds"])
         if st.session_state.plan:
             c1, c2 = st.columns([1, 2])
-            if c1.button("Send to my phone", use_container_width=True):
+            if c1.button("Send to my phone", width="stretch"):
                 try:
                     notify.send_plan(st.session_state.plan)
                     st.toast("Sent to your phone")
                 except Exception as exc:
                     st.error(f"Couldn't send: {exc}")
-            with c2.popover("Preview the notification", use_container_width=True):
+            with c2.popover("Preview the notification", width="stretch"):
                 title, body = notify.plan_message(st.session_state.plan)
                 st.markdown(f"**{title}**")
                 st.text(body)
@@ -487,10 +487,10 @@ with tab_plan:
                         seen.add(item["name"])
                         n1, n2, n3 = st.columns([6, 2, 3])
                         n1.markdown(f"{item['name']}")
-                        if n2.button("Love it", key=f"love-{item['id']}", use_container_width=True):
+                        if n2.button("Love it", key=f"love-{item['id']}", width="stretch"):
                             remember("favorites", item["name"])
                             st.toast(f"Added {item['name']} to favorites")
-                        if n3.button("Never again", key=f"ban-{item['id']}", use_container_width=True):
+                        if n3.button("Never again", key=f"ban-{item['id']}", width="stretch"):
                             remember("never_eat", item["name"])
                             st.toast(f"{item['name']} is blocked from now on")
             if st.session_state.session_id:
@@ -512,7 +512,8 @@ with tab_plan:
 # Browse menus: the raw data the agent works from
 # ---------------------------------------------------------------------------------------
 with tab_browse:
-    st.caption("The same data the agent sees, straight from Nutrislice. Nutrition is per serving.")
+    st.caption("The same data the agent sees. Menu and Section use Nutrislice's own names, so you can "
+               "find each item in the Nutrislice app. Nutrition is per serving.")
     b1, b2, b3 = st.columns(3)
     b_date = b1.date_input("Date", date.today())
     b_hall = b2.selectbox("Hall", list(config.HALLS))
@@ -524,11 +525,11 @@ with tab_browse:
         st.info(menu["summary"])
     else:
         st.caption(menu["summary"])
-        rows = [{"Station": station, "Item": i["name"], "Serving": i["serving"], "kcal": i["calories"],
-                 "Protein (g)": i["protein_g"], "Carbs (g)": i["carbs_g"], "Fat (g)": i["fat_g"],
-                 "Contains": ", ".join(i["allergens"]), "Tags": ", ".join(i["tags"])}
-                for station, items in menu["stations"].items() for i in items]
-        st.dataframe(rows, use_container_width=True, hide_index=True, height=520)
+        rows = [{"Menu": i["station"], "Section": i["section"], "Item": i["name"], "Serving": i["serving"],
+                 "kcal": i["calories"], "Protein (g)": i["protein_g"], "Carbs (g)": i["carbs_g"],
+                 "Fat (g)": i["fat_g"], "Contains": ", ".join(i["allergens"]), "Tags": ", ".join(i["tags"])}
+                for i in T.menu_items(b_hall, b_meal, b_date.isoformat())]
+        st.dataframe(rows, width="stretch", hide_index=True, height=520)
 
 
 # ---------------------------------------------------------------------------------------
@@ -553,7 +554,7 @@ with tab_history:
 with tab_how:
     svg_path = config.ROOT / "docs" / "architecture.svg"
     if svg_path.exists():
-        st.image(str(svg_path), use_container_width=True)
+        st.image(str(svg_path), width="stretch")
     st.markdown("""
 **The loop.** You give a goal. Claude (through the Claude Agent SDK) reads your memory, writes a short plan,
 then calls tools: it opens menus, searches and compares the two halls, and adds up nutrition. It reads every
