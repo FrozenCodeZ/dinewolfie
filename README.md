@@ -130,7 +130,13 @@ python -m src.cli --simulate offline "plan my day"
 
 In the web app the same switches are in the sidebar under **Demo: break things on purpose**.
 
-**Menu data mode:** by default (`DINEWOLFIE_DATA_MODE=sample`, or `--sample`) DineWolfie uses the real menus saved in `data/sample/`, so it works without network access to Nutrislice. Contacting Nutrislice is switched off (see Data below).
+**Menu data mode:** by default DineWolfie loads today's menus from Nutrislice (`DINEWOLFIE_DATA_MODE=live`). Use `--sample` (or `DINEWOLFIE_DATA_MODE=sample`) for the real menus saved in `data/sample/`, which work offline on any date.
+
+**Other locations:** besides East and West, DineWolfie can use every SBU location on Nutrislice, such as Roth Food Court (paid with dining dollars). List them with `python -m src.fetch_menu --locations`, add them in the sidebar under **Also eat at**, or just name one in your goal ("lunch at Roth").
+
+**No AI key?** Pick **Built-in** as the engine (or `DINEWOLFIE_ENGINE=builtin`): a simple planner in code that picks the best protein for the calories within your rules, checked the same way. It also takes over automatically when the AI service is rate-limited, and says so.
+
+> If your `.env` was copied from an older `.env.example`, it may still say `DINEWOLFIE_DATA_MODE=sample` and `DINEWOLFIE_LIVE_FETCH=off`. Change them to `live` and `on`.
 
 **Tests** (offline, no Claude calls):
 
@@ -184,11 +190,11 @@ The public site can't use your Claude login, so it lets you pick **Claude** (Ant
 
 Step-by-step setup: [docs/hosting.md](docs/hosting.md). All settings: [.streamlit/secrets.toml.example](.streamlit/secrets.toml.example).
 
-In the terminal, `DINEWOLFIE_ENGINE=groq` with `GROQ_API_KEY` in `.env` runs the CLI and the morning run on Groq.
+In the terminal, `DINEWOLFIE_ENGINE=groq` with `GROQ_API_KEY` in `.env` runs the CLI and the morning run on Groq. When a Groq model hits its per-minute limit, DineWolfie switches to the next model in `DINEWOLFIE_GROQ_FALLBACKS` (each model has its own limit), and if all are busy it makes the plan with the built-in planner instead of waiting.
 
 ## Data
 
-Menu data comes from Stony Brook University's Nutrislice menus (`stonybrook.api.nutrislice.com`). We have asked SBU Campus Dining for permission to fetch them automatically and have not heard back yet, so **live fetching is off by default** (`DINEWOLFIE_LIVE_FETCH=off`): DineWolfie never contacts Nutrislice and runs on saved menus. If permission is granted and it is switched on, DineWolfie is polite about it: one request covers a whole week for one station, results are cached on disk, a station is fetched at most once a day, requests are spaced out and identify the project, and if the server refuses or rate-limits any request, all fetching stops at once instead of retrying. Nutrition values are Nutrislice's per-serving numbers. When an item has none, DineWolfie says "nutrition not listed" instead of guessing.
+Menu data comes from Stony Brook University's Nutrislice menus (`stonybrook.api.nutrislice.com`). SBU Campus Dining gave us permission to fetch them, so **live fetching is on** (`DINEWOLFIE_LIVE_FETCH=on`; set it to `off` to never contact Nutrislice). DineWolfie is polite about it: one request covers a whole week for one station, results are cached on disk, a station is fetched at most once a day, requests are spaced out and identify the project, and if the server refuses or rate-limits any request, all fetching stops at once instead of retrying. Nutrition values are Nutrislice's per-serving numbers. When an item has none, DineWolfie says "nutrition not listed" instead of guessing.
 
 ## Notes
 

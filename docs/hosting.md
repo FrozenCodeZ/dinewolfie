@@ -132,7 +132,8 @@ A full template of every setting is in [`.streamlit/secrets.toml.example`](../.s
 
 ## Notes
 
-- **Groq's free tier has per-minute token limits** (about 8,000 tokens per minute for `gpt-oss-120b`). In fast mode one plan's first request is about 3,500 tokens, so a plan normally fits in one go. Several plans in the same minute (or thorough mode, which sends about 40,000 tokens per plan) can still hit the limit; the app then shows "Waiting N s for Groq's free-tier limit" and carries on.
+- **Groq's free tier has per-minute token limits** (about 8,000 tokens per minute for `gpt-oss-120b`), and they're shared by **everyone using your key**. One fast-mode plan uses roughly 4,000 to 5,000, so the whole site gets only one or two plans a minute per model. DineWolfie handles it in three steps: it switches to the next Groq model (each has its own limit; see `DINEWOLFIE_GROQ_FALLBACKS`), waits only if a model frees up within a few seconds, and otherwise makes the plan with the built-in planner and says so. **For a demo or many users, the real fix is Groq's paid Developer tier** (Settings → Billing): much higher limits for well under a cent per plan.
+- **Live menus:** the first visitor of the day would wait for about 35 Nutrislice requests, so the app starts loading today's East and West menus in the background as soon as it starts. Streamlit Cloud forgets the cache when the app restarts, so the first plan after a restart can take longer.
 - **Model choice on the hosted site:** visitors using your key always get the default model (so nobody can run up your bill with a bigger one). Visitors who paste their own key can pick any model in the list.
 - **Phone notifications:** the hosted site never uses your `NTFY_TOPIC`. Each visitor types their own topic.
 - **The 8 AM morning run** still runs on your own computer (Task Scheduler), not on Streamlit Cloud.
