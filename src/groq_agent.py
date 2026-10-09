@@ -12,6 +12,10 @@ Groq's free tier allows only a few thousand tokens per minute, and every request
 the whole conversation. So this loop runs "lean": it skips the two bulkiest tools, sends
 slimmed results, shrinks older results to one-line summaries (keeping item ids), and when
 Groq says "slow down" it waits visibly instead of failing.
+
+In fast mode (the default) the first message already carries the briefing (src/briefing.py),
+so a plan usually takes one request of about 5,000 tokens instead of ~12 requests and ~40,000,
+and the loop ends the moment the checker accepts the plan.
 """
 from __future__ import annotations
 
@@ -31,15 +35,23 @@ MAX_RESULT_CHARS = 6_000
 MAX_BAD_TOOL_RETRIES = 2
 MAX_RATE_WAITS = 6
 MAX_WAIT_S = 60
+MAX_COMPLETION_TOKENS = 4096  # one fast-mode reply holds the whole plan (3 meals + swaps)
 
 
-def lean_specs() -> list[tuple]:
-    return [spec for spec in A.active_specs() if spec[0] not in SKIP_TOOLS]
+def lean_specs(fast: bool = False) -> list[tuple]:
+    return [spec for spec in A.active_specs(fast) if spec[0] not in SKIP_TOOLS]
 
 
-def tool_schemas() -> list[dict]:
+def tool_schemas(fast: bool = False) -> list[dict]:
     return [{"type": "function", "function": {"name": name, "description": desc, "parameters": schema}}
-            for name, desc, schema, _fn, _ro in lean_specs()]
+            for name, desc, schema, _fn, _ro in lean_specs(fast)]
+
+
+def model_options(model: str) -> dict:
+    """gpt-oss models can be told to think briefly, which saves time and tokens."""
+    if model.startswith("openai/gpt-oss") and config.GROQ_REASONING_EFFORT in ("low", "medium", "high"):
+        return {"reasoning_effort": config.GROQ_REASONING_EFFORT}
+    return {}
 
 
 def _row(item: dict) -> dict:
@@ -149,22 +161,29 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
         from groq import Groq
         client = Groq(api_key=engine.api_key, max_retries=0, timeout=90)  # we handle waits ourselves
     model = engine.model or config.GROQ_MODEL
-    allowed = {spec[0] for spec in lean_specs()}
+    fast = engine.fast
+    allowed = {spec[0] for spec in lean_specs(fast)}
+    tools = tool_schemas(fast)
 
     if history:
         messages = list(history) + [{"role": "user", "content": goal}]
     else:
-        messages = [{"role": "system", "content": A.system_prompt(plan_date) + GROQ_NOTE},
-                    {"role": "user", "content": f"Plan date: {plan_date.isoformat()}.\nMy goal: {goal}"}]
+        first = f"Plan date: {plan_date.isoformat()}.\nMy goal: {goal}"
+        if fast:
+            from src.briefing import gather
+            first += "\n\n" + gather(plan_date, goal)
+        messages = [{"role": "system", "content": A.system_prompt(plan_date, fast) + ("" if fast else GROQ_NOTE)},
+                    {"role": "user", "content": first}]
 
     nudged, bad_tool_retries, waits = False, 0, 0
     turns = 0
     while turns < config.MAX_TURNS:
         shrink_history(messages)
         try:
-            resp = client.chat.completions.create(model=model, messages=_wire(messages), tools=tool_schemas(),
+            resp = client.chat.completions.create(model=model, messages=_wire(messages), tools=tools,
                                                   tool_choice="auto", temperature=0.3,
-                                                  max_completion_tokens=2048)
+                                                  max_completion_tokens=MAX_COMPLETION_TOKENS,
+                                                  **model_options(model))
         except Exception as exc:
             wait = _retry_after(exc)
             if wait is not None and waits < MAX_RATE_WAITS:
@@ -207,6 +226,11 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
             result = _execute(tc.function.name, tc.function.arguments, allowed)
             messages.append({"role": "tool", "tool_call_id": tc.id,
                              "content": _result_text(tc.function.name, result)})
+        if fast and run.plan is not None:
+            # Accepted: no extra request for a summary. Close the turn so follow-ups stay well-formed.
+            run.reply = A.plan_reply(run.plan)
+            messages.append({"role": "assistant", "content": "Plan accepted and shown to the user."})
+            break
     else:
         run.error = "The agent ran out of steps before finishing."
     run.messages = _wire(messages)

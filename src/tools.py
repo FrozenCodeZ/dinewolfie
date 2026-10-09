@@ -301,6 +301,20 @@ def compact(item: dict) -> dict:
     }
 
 
+def _exclusion(item: dict, codes: set[str], diet: list[str], never_eat: list[str],
+               dislikes: list[str]) -> str | None:
+    """Why the user's memory rules this item out (allergen, diet, never_eat, dislike), or None."""
+    if allergy_conflicts(item, codes):
+        return "allergen"
+    if not diet_ok(item, diet):
+        return "diet"
+    if blacklist_hits(item, never_eat):
+        return "never_eat"
+    if dislike_hits(item, dislikes):
+        return "dislike"
+    return None
+
+
 def _density(item: dict) -> float:
     if not item["protein_g"] or not item["calories"]:
         return 0.0
@@ -420,16 +434,11 @@ def search_items(meal: str, hall: str = "any", date: str | None = None,
         items, meta = _menu(h, meal, day)
         hall_status[h] = meta["status"]
         for item in items:
+            excluded_by = _exclusion(item, codes, diet, never_eat, dislikes)
             if station and station.lower() not in item["station"].lower():
                 counts["station"] += 1
-            elif allergy_conflicts(item, codes):
-                counts["allergen"] += 1
-            elif not diet_ok(item, diet):
-                counts["diet"] += 1
-            elif blacklist_hits(item, never_eat):
-                counts["never_eat"] += 1
-            elif dislike_hits(item, dislikes):
-                counts["dislike"] += 1
+            elif excluded_by:
+                counts[excluded_by] += 1
             elif (min_protein_g or max_calories) and item["calories"] is None:
                 counts["no_nutrition"] += 1
             elif min_protein_g and (item["protein_g"] or 0) < float(min_protein_g):
@@ -514,6 +523,70 @@ def compare_halls(meal: str, date: str | None = None, min_protein_g: float | Non
         + f". Edge: {best}.")
     return {"status": "ok", "meal": meal, "date": day.isoformat(),
             "halls": report, "better_hall_by_protein": best, "summary": summary}
+
+
+SCOUT_PER_HALL = 10
+
+
+def scout_meal(meal: str, date: str | None = None, per_hall: int = SCOUT_PER_HALL) -> dict:
+    """Fast mode: one meal's best candidates at each hall, already filtered by the user's memory.
+
+    Favorites first, then the highest-protein items, then the most protein per calorie (for
+    cutting), plus up to two treats. That's usually enough for the model to choose a whole meal
+    without searching again; it can still call search_items for anything else.
+    """
+    day, meal = resolve_date(date), normalize_meal(meal)
+    prefs = read_prefs()
+    codes = allergen_codes(prefs["allergies"])
+    favorites = list(prefs.get("favorites") or [])
+    halls = {}
+    for h in HALLS:
+        items, meta = _menu(h, meal, day)
+        if meta["status"] != "ok":
+            halls[h] = {"status": meta["status"], "fits": 0, "items": [], "error": meta.get("error")}
+            continue
+        fits = [i for i in items
+                if not _exclusion(i, codes, prefs["diet"], prefs.get("never_eat"), prefs["dislikes"])]
+        known = [i for i in fits if i["calories"] is not None]
+        picks: dict[str, dict] = {}  # lower-cased name -> item; the same dish can sit at two stations
+
+        def add(seq, upto):
+            for item in seq:
+                if len(picks) >= upto:
+                    return
+                picks.setdefault(item["name"].strip().lower(), item)
+
+        add([i for i in fits if is_favorite(i, favorites)], 3)
+        add(sorted(known, key=SORTS["protein"]), max(3, per_hall * 6 // 10))
+        add(sorted(known, key=SORTS["protein_per_calorie"]), per_hall)
+        if (prefs.get("treats") or "sometimes") != "never":
+            add([i for i in known if looks_like_treat(i)], len(picks) + 2)
+        rows = []
+        for item in picks.values():
+            row = {"id": item["id"], "name": item["name"], "station": item["station"],
+                   "serving": item["serving"], "protein_g": item["protein_g"], "calories": item["calories"]}
+            if is_favorite(item, favorites):
+                row["favorite"] = True
+            if looks_like_treat(item):
+                row["treat"] = True
+            rows.append(row)
+        halls[h] = {"status": "ok" if fits else "no_matches", "fits": len(fits), "items": rows}
+
+    posted = [h for h in HALLS if halls[h]["status"] != "no_menu_posted" and halls[h]["status"] != "error"]
+    status = ("ok" if any(halls[h]["status"] == "ok" for h in HALLS)
+              else "no_matches" if posted else "no_menu_posted")
+    parts = []
+    for h in HALLS:
+        info = halls[h]
+        if info["status"] == "ok":
+            best = max(info["items"], key=lambda r: r["protein_g"] or 0)
+            parts.append(f"{h} {info['fits']} fit you (top: {best['name']}, {best['protein_g']} g)")
+        elif info["status"] == "no_matches":
+            parts.append(f"{h} nothing fits your diet/allergies")
+        else:
+            parts.append(f"{h} {info['status'].replace('_', ' ')}")
+    return {"status": status, "meal": meal, "date": day.isoformat(), "halls": halls,
+            "summary": f"{meal.replace('_', ' ').capitalize()}: " + "; ".join(parts) + "."}
 
 
 def get_item_details(ids: list[str], date: str | None = None) -> dict:
@@ -662,6 +735,7 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
         "date": day.isoformat(),
         "goal": plan.get("goal", ""),
         "headline": plan.get("headline", ""),
+        "message": str(plan.get("message") or "").strip(),
         "meals": meals_out,
         "totals": totals["totals"],
         "items_missing_nutrition": totals["items_missing_nutrition"],

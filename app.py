@@ -74,6 +74,8 @@ h1, h2, h3, .dw-word { font-family: 'Bricolage Grotesque', sans-serif; letter-sp
 .tk-done { background: transparent; box-shadow: none; border-top: none; color: var(--muted);
   font-size: .85rem; padding: .1rem .2rem; }
 .tk-done::before { border-color: var(--green); background: var(--green); }
+.tk-auto { font-family: 'JetBrains Mono', monospace; font-size: .68rem; color: var(--navy);
+  background: var(--steel); border-radius: 999px; padding: 0 .4rem; margin-left: .3rem; vertical-align: 1px; }
 .chip { display: inline-block; font-size: .78rem; padding: .05rem .45rem; border-radius: 999px;
   background: var(--steel); color: var(--ink); margin: .15rem .2rem 0 0; }
 
@@ -139,6 +141,8 @@ TOOL_LABELS = {
     "get_item_details": "Read item details",
     "sum_nutrition": "Added up nutrition",
     "submit_plan": "Sent the plan to the checker",
+    "scout_meal": "Scouted both halls",
+    "lookup_nutrition": "Looked up nutrition on the web",
 }
 MEAL_LABEL = {"breakfast": "Breakfast", "brunch": "Brunch", "lunch": "Lunch", "dinner": "Dinner",
               "late_night": "Late night"}
@@ -264,7 +268,8 @@ def rail_html(events: list[dict], live: bool) -> str:
                 continue
             idx = len(tickets)
             pending.setdefault(ev["tool"], []).append(idx)
-            tickets.append({"tool": ev["tool"], "input": ev["input"], "dt": dt, "result": None})
+            tickets.append({"tool": ev["tool"], "input": ev["input"], "dt": dt, "result": None,
+                            "auto": bool(ev.get("auto"))})
         elif kind == "tool_result":
             if ev["tool"] in ("make_plan", "log_adaptation"):
                 continue
@@ -273,9 +278,10 @@ def rail_html(events: list[dict], live: bool) -> str:
                 tickets[queue.pop(0)]["result"] = ev
         elif kind == "adaptation":
             why = f'<div class="tk-in">{e(ev["reason"])}</div>' if ev.get("reason") else ""
+            change = f'<br>{e(ev["change"])}' if ev.get("change") else ""
             tickets.append(f'<div class="tk tk-adapt"><div class="tk-head"><span class="tk-name">Changed course'
                            f'</span><span class="tk-time">{dt}</span></div><div class="tk-out"><b>'
-                           f'{e(ev["problem"])}</b><br>{e(ev["change"])}</div>{why}</div>')
+                           f'{e(ev["problem"])}</b>{change}</div>{why}</div>')
         elif kind == "wait":
             tickets.append(f'<div class="tk tk-think">⏳ {e(ev["text"])}</div>')
         elif kind in ("warning", "error"):
@@ -296,8 +302,10 @@ def rail_html(events: list[dict], live: bool) -> str:
                 for p in res.get("data", {}).get("problems", [])[:4]:
                     body += f'<div class="tk-in">• {e(p)}</div>'
             label = TOOL_LABELS.get(t["tool"], t["tool"])
+            auto = ('<span class="tk-auto" title="Run by the app\'s code before the AI starts, to save time">'
+                    'auto</span>' if t["auto"] else "")
             t = (f'<div class="tk"><div class="tk-head"><span class="tk-name">{e(label)} '
-                 f'<span class="tk-tool">{e(t["tool"])}</span></span><span class="tk-time">{t["dt"]}</span>'
+                 f'<span class="tk-tool">{e(t["tool"])}</span>{auto}</span><span class="tk-time">{t["dt"]}</span>'
                  f'</div><div class="tk-in">{e(_fmt_input(t["input"]))}</div>{body}</div>')
         if live and i == len(tickets) - 1:
             t = t.replace('class="tk', 'class="tk-new tk', 1)
@@ -388,7 +396,7 @@ with st.sidebar:
     st.markdown("### AI engine")
     provider = st.radio("Engine", ["Claude", "Groq"], horizontal=True, key="provider",
                         help="Claude runs through the Claude Agent SDK. Groq runs an open model "
-                             f"({config.GROQ_MODEL}) through the same tools and checker.").lower()
+                             "through the same tools and checker.").lower()
     key_policy = dict(hosted=HOSTED, auth_enabled=AUTH_ENABLED, signed_in=SIGNED_IN, email=USER_EMAIL,
                       allowed_emails=list(secret("allowed_emails", []) or []),
                       open_to_all=bool(secret("share_keys_with_everyone", False)))
@@ -404,7 +412,25 @@ with st.sidebar:
     else:
         st.caption(access.explain(why, provider))
         ENGINE_READY = api_key is not None
-    ENGINE = Engine(provider, api_key, config.GROQ_MODEL if provider == "groq" else None)
+    model_list = config.CLAUDE_MODELS if provider == "claude" else config.GROQ_MODELS
+    default_model = config.MODEL if provider == "claude" else config.GROQ_MODEL
+    if default_model not in model_list:
+        model_list = [default_model] + model_list
+    # On the hosted site the owner's key always runs the default model, so a visitor can't
+    # pick a pricier one on someone else's bill. With your own key (or locally) you choose.
+    locked = HOSTED and why == access.APP
+    model = st.selectbox("Model", model_list, index=model_list.index(default_model), key=f"model_{provider}",
+                         disabled=locked,
+                         help="Listed fastest and cheapest first. Bigger models plan a little better but are "
+                              "slower and cost more." + (" Paste your own key to choose." if locked else ""))
+    if locked:
+        model = default_model
+    speed = st.radio("Speed", ["Fast", "Thorough"], horizontal=True, key="speed",
+                     index=0 if config.MODE != "thorough" else 1,
+                     help="Fast: the app gathers your memory and both halls' menus first, so the AI usually "
+                          "decides in one step (about 10 s). Thorough: the AI does every lookup itself, step "
+                          "by step (slower, but you see more of its reasoning).")
+    ENGINE = Engine(provider, api_key, model, speed.lower())
 
     with st.expander("Web nutrition lookup (Tavily)"):
         st.caption("For items the menu lists without nutrition. Results are labeled as web estimates and "
@@ -525,7 +551,9 @@ def start_run(goal: str, plan_date: date, resume, rail_slot, tray_slot) -> None:
             tray_slot.markdown(tray_html(ev["plan"]), unsafe_allow_html=True)
 
     run = run_agent(goal, plan_date=plan_date, on_event=on_event, resume=resume, engine=ENGINE)
-    st.session_state.update(plan=run.plan or st.session_state.plan, reply=run.reply,
+    # Fast mode's reply repeats the tray, so only its friendly message is shown under it.
+    reply = (run.plan.get("message") or "") if ENGINE.fast and run.plan else run.reply
+    st.session_state.update(plan=run.plan or st.session_state.plan, reply=reply,
                             resume=run.session_id or run.messages or st.session_state.resume,
                             resume_engine=ENGINE.provider, error=run.error,
                             stats={"seconds": run.duration_s, "tools": run.tool_calls,
@@ -680,11 +708,16 @@ with tab_how:
     if svg_path.exists():
         st.image(str(svg_path), width="stretch")
     st.markdown("""
-**The loop.** You give a goal. Claude (through the Claude Agent SDK) reads your memory, writes a short plan,
-then calls tools: it opens menus, searches and compares the two halls, and adds up nutrition. It reads every
-result, and when something fails (a hall hasn't posted dinner, the network is down, nothing fits your filters,
-the goal is out of reach) it changes course and tells you what it changed. It finishes by sending the plan to
-a checker that confirms every item is really on that hall's menu and safe for your allergies and diet.
+**Fast mode (default).** You give a goal. The app's code reads your memory and recent plans and scouts both
+halls for each meal (the steps tagged *auto*), then hands the AI one compact briefing. The AI decides the whole
+day in about one step: which hall and which items for each meal, a swap for each, and what to do when something
+is missing (a hall hasn't posted dinner, nothing fits your diet, the goal is out of reach). It can still search
+the menus if the briefing lacks something. Then a checker confirms every item is really on that hall's menu and
+safe for your allergies and diet; if it isn't, the AI has to fix the plan and resubmit.
+
+**Thorough mode.** The AI does every step itself: it writes a plan, opens menus, searches and compares the two
+halls, adds up nutrition, logs each change of course, and submits to the same checker. Slower, but you see
+more of its reasoning.
 
 **The code calculates, the model decides.** Every number on the tray comes from Python, never from the model.
 

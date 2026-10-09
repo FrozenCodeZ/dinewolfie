@@ -164,7 +164,7 @@ class FakeGroq:
         return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
 
 
-def test_groq_loop_runs_tools_and_gets_a_checked_plan(prefs):
+def test_groq_thorough_loop_runs_tools_and_gets_a_checked_plan(prefs):
     from src.agent import AgentRun, Engine, _current
     from src.groq_agent import run_groq
 
@@ -182,7 +182,8 @@ def test_groq_loop_runs_tools_and_gets_a_checked_plan(prefs):
     events = []
     token = _current.set({"run": run, "on_event": events.append})
     try:
-        run_groq(run, "plan dinner", T.resolve_date(SAMPLE_DATE), None, Engine("groq", "gsk-test"), client=fake)
+        run_groq(run, "plan dinner", T.resolve_date(SAMPLE_DATE), None,
+                 Engine("groq", "gsk-test", mode="thorough"), client=fake)
     finally:
         _current.reset(token)
     assert run.plan is not None and run.plan["meals"][0]["hall"] == "East"

@@ -4,6 +4,7 @@
     python -m src.cli --date tomorrow "high protein, under 2000 kcal"
     python -m src.cli --simulate missing:West:dinner "plan my day"      # demo: West dinner not posted
     python -m src.cli --simulate offline "plan my day"                  # demo: network down, use cache
+    python -m src.cli --thorough "plan my day"      # the model drives every step (slower, more to watch)
 """
 from __future__ import annotations
 
@@ -43,7 +44,8 @@ def print_event(event: dict) -> None:
         pass  # the final reply is printed at the end
     elif kind == "tool_call":
         if event["tool"] not in ("make_plan", "log_adaptation"):
-            print(f"{MAGENTA}🔧 {event['tool']}{RESET}{DIM}({_short(event['input'])}){RESET}")
+            who = f"{DIM}[auto]{RESET} " if event.get("auto") else ""
+            print(f"{MAGENTA}🔧 {who}{MAGENTA}{event['tool']}{RESET}{DIM}({_short(event['input'])}){RESET}")
     elif kind == "tool_result":
         if event["tool"] in ("make_plan", "log_adaptation"):
             return
@@ -53,8 +55,9 @@ def print_event(event: dict) -> None:
         for problem in event.get("data", {}).get("problems", []):
             print(f"      {YELLOW}- {problem}{RESET}")
     elif kind == "adaptation":
-        print(f"{YELLOW}{BOLD}🔄 ADAPT:{RESET}{YELLOW} {event['problem']} -> {event['change']}"
-              f"{(' (' + event['reason'] + ')') if event['reason'] else ''}{RESET}")
+        change = f" -> {event['change']}" if event.get("change") else ""
+        print(f"{YELLOW}{BOLD}🔄 ADAPT:{RESET}{YELLOW} {event['problem']}{change}"
+              f"{(' (' + event['reason'] + ')') if event.get('reason') else ''}{RESET}")
     elif kind == "wait":
         print(f"{DIM}⏳ {event['text']}{RESET}")
     elif kind == "warning":
@@ -107,6 +110,7 @@ def main() -> int:
     parser.add_argument("--date", default="today", help="YYYY-MM-DD, today or tomorrow")
     parser.add_argument("--simulate", default="", help="missing:West:dinner and/or offline (comma separated)")
     parser.add_argument("--sample", action="store_true", help="use the committed sample menus (offline)")
+    parser.add_argument("--thorough", action="store_true", help="let the model drive every step (slower)")
     args = parser.parse_args()
 
     if args.sample:
@@ -115,11 +119,16 @@ def main() -> int:
         os.environ["DINEWOLFIE_SIMULATE"] = args.simulate
         T._load_simulation_from_env()
     goal = " ".join(args.goal) or default_goal()
-    run = run_agent(goal, plan_date=T.resolve_date(args.date), on_event=print_event, engine=engine_from_env())
+    engine = engine_from_env()
+    if args.thorough:
+        engine.mode = "thorough"
+    run = run_agent(goal, plan_date=T.resolve_date(args.date), on_event=print_event, engine=engine)
     if run.plan:
         print("\n" + format_plan(run.plan))
-    if run.reply:
-        print(f"\n{BOLD}💬 DineWolfie:{RESET} {run.reply}")
+    # Fast mode's reply repeats the plan above, so only its friendly message is printed.
+    reply = (run.plan or {}).get("message") if engine.fast and run.plan else run.reply
+    if reply:
+        print(f"\n{BOLD}💬 DineWolfie:{RESET} {reply}")
     return 0 if run.plan else 1
 
 

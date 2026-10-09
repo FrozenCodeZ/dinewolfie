@@ -110,11 +110,22 @@ DATA_MODE = os.getenv("DINEWOLFIE_DATA_MODE", "sample").strip().lower()
 LIVE_FETCH = os.getenv("DINEWOLFIE_LIVE_FETCH", "off").strip().lower() in ("on", "1", "true", "yes")
 
 # --- Agent -------------------------------------------------------------------
-MODEL = os.getenv("DINEWOLFIE_MODEL", "claude-opus-5-5").strip() or None
-EFFORT = os.getenv("DINEWOLFIE_EFFORT", "medium").strip() or None
+# fast (default): the code gathers memory + menus first and the model decides in about one call.
+# thorough: the model drives every step itself (slower, shows more of its reasoning).
+MODE = os.getenv("DINEWOLFIE_MODE", "fast").strip().lower() or "fast"
+# Claude Haiku 5.5 is the fastest, cheapest current Claude model ($0.10 / $0.50 per million tokens).
+# Bigger options: claude-sonnet-5-5 ($2 / $10) or claude-opus-5-5 ($4 / $20).
+MODEL = os.getenv("DINEWOLFIE_MODEL", "claude-haiku-5-5").strip() or None
+CLAUDE_MODELS = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
+EFFORT = os.getenv("DINEWOLFIE_EFFORT", "medium").strip() or None            # thorough mode
+FAST_EFFORT = os.getenv("DINEWOLFIE_FAST_EFFORT", "low").strip() or None     # fast mode
 MAX_TURNS = int(os.getenv("DINEWOLFIE_MAX_TURNS", "40"))
+FAST_MAX_TURNS = int(os.getenv("DINEWOLFIE_FAST_MAX_TURNS", "8"))
 # Optional second engine. Any Groq model with tool use works; see console.groq.com/docs/models.
 GROQ_MODEL = os.getenv("DINEWOLFIE_GROQ_MODEL", "openai/gpt-oss-120b").strip()
+GROQ_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+# How long gpt-oss models think before answering: low | medium | high. Lower = faster, fewer tokens.
+GROQ_REASONING_EFFORT = os.getenv("DINEWOLFIE_GROQ_REASONING", "low").strip().lower() or "low"
 
 # --- Notifications -------------------------------------------------------------
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").rstrip("/")

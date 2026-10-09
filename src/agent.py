@@ -2,10 +2,16 @@
 
     Goal -> decide -> use tool(s) -> observe -> (adapt) -> finish
 
-The Claude Agent SDK runs the loop. We give it:
+The Claude Agent SDK runs the loop (src/groq_agent.py is the same loop for Groq). We give it:
   * a system prompt (how to behave),
   * our tools from src/tools.py, wrapped as an in-process MCP server,
   * a callback so every step can be shown live in the terminal or the web UI.
+
+Two modes:
+  * fast (default): the code runs the standard lookups first (src/briefing.py) and the model
+    usually decides and submits the plan in one call. The run stops as soon as the checker
+    accepts it, and the reply is written by code from the checked plan.
+  * thorough: the model drives every step itself (make_plan, searches, comparisons, ...).
 
 run_agent(goal) returns an AgentRun with the final plan, the reply text and
 the full trace of steps.
@@ -22,7 +28,7 @@ from contextvars import ContextVar
 from typing import Any, Callable
 
 from claude_agent_sdk import (
-    AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, ThinkingBlock,
+    AssistantMessage, ClaudeAgentOptions, HookMatcher, ResultMessage, TextBlock, ThinkingBlock,
     ToolAnnotations, ToolUseBlock, create_sdk_mcp_server, query, tool,
 )
 
@@ -123,7 +129,9 @@ TOOL_SPECS = [
                "alternatives": _ALTERNATIVES},
                ["meal", "hall", "items", "reason"])},
            "adaptations": {**_STRS, "description": "Each change you made because something failed/didn't fit."},
-           "tips": {**_STRS, "description": "Optional practical tips, e.g. how to close a protein gap."}},
+           "tips": {**_STRS, "description": "Optional practical tips, e.g. how to close a protein gap."},
+           "message": {"type": "string", "description": "One or two warm sentences to the user, no numbers "
+                                                         "(the app adds the totals)."}},
           ["date", "meals", "headline"]),
      T.submit_plan, False),
     ("lookup_nutrition",
@@ -134,11 +142,14 @@ TOOL_SPECS = [
      T.lookup_nutrition, True),
 ]
 TOOL_NAMES = [spec[0] for spec in TOOL_SPECS]
+# Fast mode: the briefing already covers memory, history, menus and hall comparisons.
+FAST_TOOLS = {"search_items", "sum_nutrition", "submit_plan", "update_prefs", "lookup_nutrition"}
 
 
-def active_specs() -> list[tuple]:
+def active_specs(fast: bool = False) -> list[tuple]:
     """The tools this run can use: the web lookup only when a Tavily key is set."""
-    return [s for s in TOOL_SPECS if s[0] != "lookup_nutrition" or T.tavily_key()]
+    return [s for s in TOOL_SPECS if (s[0] != "lookup_nutrition" or T.tavily_key())
+            and (not fast or s[0] in FAST_TOOLS)]
 
 
 # --- Run state + events -------------------------------------------------------------------
@@ -154,12 +165,18 @@ class Engine:
     provider: str = "claude"
     api_key: str | None = None
     model: str | None = None
+    mode: str = "fast"  # fast | thorough (see the top of this file)
+
+    @property
+    def fast(self) -> bool:
+        return self.mode != "thorough"
 
     @property
     def label(self) -> str:
         if self.provider == "groq":
-            return f"Groq ({self.model or config.GROQ_MODEL})"
-        return f"Claude ({self.model or config.MODEL}{', API key' if self.api_key else ', Claude plan'})"
+            return f"Groq ({self.model or config.GROQ_MODEL}, {self.mode})"
+        return (f"Claude ({self.model or config.MODEL}, {self.mode}"
+                f"{', API key' if self.api_key else ', Claude plan'})")
 
 
 @dataclass
@@ -211,26 +228,32 @@ def _trace_data(name: str, result: dict) -> dict:
         return {"stations": {s: len(v) for s, v in result.get("stations", {}).items()}}
     if name == "get_prefs":
         return {"prefs": result.get("prefs", {})}
+    if name == "scout_meal":
+        return {"halls": {h: {"status": v["status"], "fits": v["fits"], "shown": len(v["items"])}
+                          for h, v in result.get("halls", {}).items()}}
     return {}
 
 
-def tool_started(name: str, args: dict) -> None:
-    _emit({"type": "tool_call", "tool": name, "input": args})
+def tool_started(name: str, args: dict, auto: bool = False) -> None:
+    """auto=True: the code ran this lookup itself (fast mode), not the model."""
+    _emit({"type": "tool_call", "tool": name, "input": args, **({"auto": True} if auto else {})})
     state = _current.get()
     if state is not None:
         state["run"].tool_calls += 1
 
 
-def tool_finished(name: str, args: dict, result: dict | None, error: str | None = None) -> None:
+def tool_finished(name: str, args: dict, result: dict | None, error: str | None = None,
+                  auto: bool = False) -> None:
     """Report a tool's outcome to the trace. Shared by the Claude and Groq loops."""
     state = _current.get()
     run = state["run"] if state else None
+    flag = {"auto": True} if auto else {}
     if error is not None:
-        _emit({"type": "tool_result", "tool": name, "ok": False, "summary": error})
+        _emit({"type": "tool_result", "tool": name, "ok": False, "summary": error, **flag})
         return
     status = result.get("status", "ok")
     _emit({"type": "tool_result", "tool": name, "ok": status in ("ok", "accepted"), "status": status,
-           "summary": result.get("summary", ""), "data": _trace_data(name, result)})
+           "summary": result.get("summary", ""), "data": _trace_data(name, result), **flag})
     if name == "make_plan":
         _emit({"type": "plan", "steps": result.get("steps", [])})
     if name == "log_adaptation":
@@ -240,6 +263,10 @@ def tool_finished(name: str, args: dict, result: dict | None, error: str | None 
                "reason": args.get("reason", "")})
     if name == "submit_plan" and status == "accepted" and run is not None:
         run.plan = result["plan"]
+        if run.adaptations == 0:  # changes of course listed in the plan but never logged one by one
+            for text in result["plan"].get("adaptations") or []:
+                run.adaptations += 1
+                _emit({"type": "adaptation", "problem": str(text), "change": "", "reason": ""})
         _emit({"type": "final_plan", "plan": result["plan"]})
 
 
@@ -277,9 +304,9 @@ def _wrap(name: str, description: str, schema: dict, fn: Callable, read_only: bo
     return handler
 
 
-def build_server():
+def build_server(fast: bool = False):
     return create_sdk_mcp_server(name=SERVER, version="1.0.0",
-                                 tools=[_wrap(*spec) for spec in active_specs()])
+                                 tools=[_wrap(*spec) for spec in active_specs(fast)])
 
 
 # --- Prompt ---------------------------------------------------------------------------------
@@ -291,27 +318,13 @@ their day of eating from the real menus.
 Today is {weekday}, {today}; local time {now}. The plan date is {plan_date} ({plan_weekday}) unless the user \
 says otherwise.
 
-How you work: goal -> decide -> use tools -> observe -> adapt -> finish.
-1. Call get_prefs first (the user's saved memory). Call get_meal_history so you can avoid repeating recent meals.
-2. Call make_plan with a short list of the steps you will take. If you change course, call make_plan again.
-3. Gather facts with tools. Check both halls unless the user fixed a hall for a meal. compare_halls and \
-search_items find good candidates quickly; get_menu shows everything at one hall. Don't fetch the same thing twice.
-4. Look at every result's status. When something goes wrong - no menu posted, a fetch error, filters leave \
-nothing, or the goal can't be met - adapt: try the other hall, another station, a different meal slot, or relax \
-the least important constraint. Never relax an allergy or the user's diet. Each time you change course, call \
-log_adaptation right then with the problem, the change, and why.
-5. Use sum_nutrition for every number you report. Never do arithmetic yourself.
-6. Finish by calling submit_plan with the meals in the user's meals_to_plan (or the meals they asked for). It \
-checks every item against the real menu and the user's allergies and diet. If it is rejected, fix the problems \
-and submit again. Put every change you made into "adaptations".
-7. After submit_plan is accepted, reply with a short, friendly summary that reads well on a phone (under 120 \
-words): each meal with its hall and items, the totals, and any gap or caveat.
+{how}
 
 Be a good friend about food, not a calculator:
 - {name_line}
 - Give each meal 1 swap in "alternatives" (similar protein, can be at the other hall) with a short note on \
 when to pick it ("if the Grill line is long", "if you want something warm").
-- If one of the user's favorites is on today's menu (search results mark it "favorite": true), use it and say so.
+- If one of the user's favorites is on today's menu (marked "favorite"), use it and say so.
 - Treats setting: {treats}. never = no treats. sometimes = one small treat on days the goal still fits. \
 often = a treat most days. Mark it with "treat": true. Skip treats when the user is cutting or asks for light.
 - {cheat_line}
@@ -326,13 +339,43 @@ works, and say so.
 allergic to peanuts", "never give me olives again" -> never_eat, "I love the tofu scramble" -> favorites). \
 A one-off wish ("I want pizza today") is not a preference.
 - A meal is usually 2-4 items. You may use up to 3 servings of an item if that's realistic (two Greek yogurts).
-- If the goal can't be reached, build the closest plan, say how many grams short it is, and give one concrete \
-fix (for example "add a second Greek yogurt at breakfast").
+- If the goal can't be reached, build the closest plan and give one concrete fix in "tips" (for example "add a \
+second Greek yogurt at breakfast").
 - Weekends may have brunch instead of separate breakfast and lunch; breakfast/lunch searches include brunch items.
 {lookup_line}"""
 
+HOW_THOROUGH = """How you work: goal -> decide -> use tools -> observe -> adapt -> finish.
+1. Call get_prefs first (the user's saved memory). Call get_meal_history so you can avoid repeating recent meals.
+2. Call make_plan with a short list of the steps you will take. If you change course, call make_plan again.
+3. Gather facts with tools. Check both halls unless the user fixed a hall for a meal. compare_halls and \
+search_items find good candidates quickly; get_menu shows everything at one hall. Don't fetch the same thing twice.
+4. Look at every result's status. When something goes wrong - no menu posted, a fetch error, filters leave \
+nothing, or the goal can't be met - adapt: try the other hall, another station, a different meal slot, or relax \
+the least important constraint. Never relax an allergy or the user's diet. Each time you change course, call \
+log_adaptation right then with the problem, the change, and why.
+5. Use sum_nutrition for every number you report. Never do arithmetic yourself.
+6. Finish by calling submit_plan with the meals in the user's meals_to_plan (or the meals they asked for). It \
+checks every item against the real menu and the user's allergies and diet. If it is rejected, fix the problems \
+and submit again. Put every change you made into "adaptations".
+7. After submit_plan is accepted, reply with a short, friendly summary that reads well on a phone (under 120 \
+words): each meal with its hall and items, the totals, and any gap or caveat."""
 
-def system_prompt(plan_date: date) -> str:
+HOW_FAST = """How you work (fast mode): the user's message includes a BRIEFING the app gathered just now: their \
+memory, their recent plans, and the best candidate items at each hall for each meal, already filtered for their \
+allergies, diet, never-eat list and dislikes. Trust it and don't fetch it again.
+1. Decide from the briefing: 2-4 items per meal, ids exactly as listed. Add variety compared with recent plans.
+2. Only if the briefing lacks something the goal needs (a specific dish, a lighter option, more choices), call \
+search_items for that meal. Don't call tools just to double-check: the checker computes every total itself.
+3. If the briefing forces a change of course (a hall has no menu posted, nothing fits, the goal can't be \
+reached), adapt: use the other hall, combine items or servings, or relax the least important wish. Never relax \
+an allergy, the diet or the never-eat list. Write each such change into "adaptations"; leave it empty when \
+nothing went wrong (ordinary choices are not adaptations).
+4. Call submit_plan once with every meal: items, a one-line reason, one swap in "alternatives", "adaptations", \
+optional "tips", and "message": one or two warm sentences to the user with no numbers (the app adds the \
+totals). If it is rejected, fix the listed problems and submit again. Once it is accepted you are done."""
+
+
+def system_prompt(plan_date: date, fast: bool = False) -> str:
     now = datetime.now()
     prefs = T.read_prefs()
     name_line = (f"The user's name is {prefs['name']}; use it once, naturally." if prefs.get("name")
@@ -344,31 +387,50 @@ def system_prompt(plan_date: date) -> str:
     lookup_line = ("- If an item you want to recommend has no nutrition listed, you may call lookup_nutrition once "
                    "for it. Present the result as 'about X g protein (web estimate)' and keep it out of totals.\n"
                    if T.tavily_key() else "")
-    return SYSTEM_PROMPT.format(weekday=now.strftime("%A"), today=now.date().isoformat(),
+    return SYSTEM_PROMPT.format(how=HOW_FAST if fast else HOW_THOROUGH,
+                                weekday=now.strftime("%A"), today=now.date().isoformat(),
                                 now=now.strftime("%H:%M"), plan_date=plan_date.isoformat(),
                                 plan_weekday=plan_date.strftime("%A"), name_line=name_line,
                                 treats=prefs.get("treats") or "sometimes", cheat_line=cheat_line,
                                 lookup_line=lookup_line)
 
 
-def build_options(plan_date: date, resume: str | None = None, engine: Engine | None = None) -> ClaudeAgentOptions:
+def _stop_when_accepted(run: AgentRun):
+    """Fast mode: end the loop the moment the checker accepts a plan (no extra model turn for a
+    summary; the reply is written by code from the checked plan)."""
+
+    async def hook(hook_input, tool_use_id, context):
+        if run.plan is not None:
+            return {"continue_": False, "stopReason": "Plan accepted."}
+        return {}
+
+    return hook
+
+
+def build_options(plan_date: date, resume: str | None = None, engine: Engine | None = None,
+                  run: AgentRun | None = None) -> ClaudeAgentOptions:
     engine = engine or Engine()
     env = {"ENABLE_TOOL_SEARCH": "false"}  # load all tool schemas up front
     if engine.api_key:
         env["ANTHROPIC_API_KEY"] = engine.api_key  # bill this key instead of a Claude plan login
+    hooks = None
+    if engine.fast and run is not None:
+        hooks = {"PostToolUse": [HookMatcher(matcher=f"mcp__{SERVER}__submit_plan",
+                                             hooks=[_stop_when_accepted(run)])]}
     return ClaudeAgentOptions(
-        system_prompt=system_prompt(plan_date),
-        mcp_servers={SERVER: build_server()},
-        allowed_tools=[f"mcp__{SERVER}__{spec[0]}" for spec in active_specs()],
+        system_prompt=system_prompt(plan_date, engine.fast),
+        mcp_servers={SERVER: build_server(engine.fast)},
+        allowed_tools=[f"mcp__{SERVER}__{spec[0]}" for spec in active_specs(engine.fast)],
         tools=[],                      # no built-in Claude Code tools (no shell, no files): only ours
         setting_sources=[],            # ignore the user's Claude Code settings/plugins
         model=engine.model or config.MODEL,
-        effort=config.EFFORT,
+        effort=config.FAST_EFFORT if engine.fast else config.EFFORT,
         thinking={"type": "adaptive", "display": "summarized"},
-        max_turns=config.MAX_TURNS,
+        max_turns=config.FAST_MAX_TURNS if engine.fast else config.MAX_TURNS,
         cwd=str(config.ROOT),
         resume=resume,
         env=env,
+        hooks=hooks,
     )
 
 
@@ -381,7 +443,10 @@ async def _run_claude(run: AgentRun, goal: str, plan_date: date, resume: str | N
         _emit({"type": "warning", "text": "ANTHROPIC_API_KEY is set, so this run bills your API account "
                                           "instead of your Claude plan."})
     prompt = goal if resume else f"Plan date: {plan_date.isoformat()}.\nMy goal: {goal}"
-    async for message in query(prompt=prompt, options=build_options(plan_date, resume, engine)):
+    if engine.fast and not resume:
+        from src.briefing import gather  # imported here: briefing imports this module
+        prompt += "\n\n" + gather(plan_date, goal)
+    async for message in query(prompt=prompt, options=build_options(plan_date, resume, engine, run)):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, ThinkingBlock) and block.thinking.strip():
@@ -392,7 +457,9 @@ async def _run_claude(run: AgentRun, goal: str, plan_date: date, resume: str | N
             run.session_id = message.session_id
             run.num_turns = message.num_turns
             run.cost_usd = message.total_cost_usd
-            if message.is_error:
+            if engine.fast and run.plan is not None:
+                run.reply = plan_reply(run.plan)  # stopped on purpose right after the checker accepted
+            elif message.is_error:
                 run.error = message.result or message.subtype
             else:
                 run.reply = message.result or ""
@@ -452,10 +519,33 @@ def run_agent(goal: str, plan_date: date | None = None, on_event: Callable[[dict
 
 
 def engine_from_env() -> Engine:
-    """For the terminal and the morning run: DINEWOLFIE_ENGINE=claude|groq plus the matching key."""
+    """For the terminal and the morning run: DINEWOLFIE_ENGINE=claude|groq plus the matching key,
+    DINEWOLFIE_MODE=fast|thorough."""
     if os.getenv("DINEWOLFIE_ENGINE", "claude").strip().lower() == "groq":
-        return Engine("groq", os.getenv("GROQ_API_KEY"), config.GROQ_MODEL)
-    return Engine("claude", None)  # the SDK picks up ANTHROPIC_API_KEY itself if it's set
+        return Engine("groq", os.getenv("GROQ_API_KEY"), config.GROQ_MODEL, config.MODE)
+    return Engine("claude", None, None, config.MODE)  # the SDK picks up ANTHROPIC_API_KEY itself if set
+
+
+MEAL_NAMES = {"breakfast": "Breakfast", "brunch": "Brunch", "lunch": "Lunch", "dinner": "Dinner",
+              "late_night": "Late night"}
+
+
+def plan_reply(plan: dict) -> str:
+    """The short reply for a checked plan, written by code so every number is exact (fast mode)."""
+    lines = [plan["message"], ""] if plan.get("message") else []
+    for meal in plan["meals"]:
+        names = ", ".join((f"{i['servings']:g}× " if i["servings"] != 1 else "") + i["name"] for i in meal["items"])
+        protein = (meal.get("totals") or {}).get("protein_g", 0)
+        lines.append(f"- **{MEAL_NAMES.get(meal['meal'], meal['meal'])} at {meal['hall']}:** {names} "
+                     f"({protein} g protein)")
+    t = plan["totals"]
+    total = f"**Total:** {t['protein_g']} g protein, {t['calories']} kcal"
+    if plan.get("protein_gap_g"):
+        total += f" ({plan['protein_gap_g']} g short of your {plan['protein_goal_g']} g goal)"
+    lines += ["", total + "."]
+    if plan.get("tips"):
+        lines.append(f"Tip: {plan['tips'][0]}")
+    return "\n".join(lines)
 
 
 def default_goal(prefs: dict | None = None) -> str:
