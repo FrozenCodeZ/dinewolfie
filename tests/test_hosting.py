@@ -268,42 +268,93 @@ def test_old_results_shrink_to_ids_and_summary():
     assert msgs[3]["content"] == big  # the latest results stay complete
 
 
-def test_groq_waits_visibly_when_rate_limited(prefs):
+class RateLimited(Exception):
+    status_code = 429
+    response = SimpleNamespace(headers={"retry-after": "7"})
+
+
+def _run_with(fake, monkeypatch, fallbacks, **engine):
+    from src import groq_agent
     from src.agent import AgentRun, Engine, _current
     from src.groq_agent import run_groq
-
-    prefs()
-
-    class RateLimited(Exception):
-        status_code = 429
-        response = SimpleNamespace(headers={"retry-after": "7"})
-
-    calls = {"n": 0}
-
-    def flaky():
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RateLimited("rate limit")
-        return {"content": "ok"}
-
-    fake = FakeGroq([flaky, flaky, flaky])
-    original = fake.create
-
-    def create(**kw):
-        step = fake.script[0]
-        if callable(step) and calls["n"] == 0:
-            fake.script.pop(0)
-            step()  # raises the 429 once
-        return original(**kw)
-
-    fake.chat.completions.create = create
+    monkeypatch.setattr(config, "GROQ_FALLBACK_MODELS", fallbacks)
     slept, events = [], []
     run = AgentRun(goal="x", engine="groq")
     token = _current.set({"run": run, "on_event": events.append})
     try:
-        run_groq(run, "x", T.resolve_date(SAMPLE_DATE), None, Engine("groq", "gsk-test"), client=fake,
-                 sleep=slept.append)
+        def sleep(seconds):  # like real time passing: the cool-downs are over afterwards
+            slept.append(seconds)
+            groq_agent._cooldown.clear()
+
+        run_groq(run, "x", T.resolve_date(SAMPLE_DATE), None, Engine("groq", "gsk-test", **engine), client=fake,
+                 sleep=sleep)
     finally:
         _current.reset(token)
-    assert slept == [7.0]
-    assert any(e["type"] == "wait" and "7 s" in e["text"] for e in events)
+    return run, slept, events
+
+
+def test_groq_switches_model_instead_of_waiting(prefs, monkeypatch):
+    prefs()
+    seen = []
+
+    class Fake(FakeGroq):
+        def create(self, **kw):
+            seen.append(kw["model"])
+            if kw["model"] == "openai/gpt-oss-120b":
+                raise RateLimited("rate limit")
+            return super().create(**kw)
+
+    run, slept, events = _run_with(Fake([{"content": "ok"}, {"content": "ok"}]), monkeypatch,
+                                   ["openai/gpt-oss-20b"], model="openai/gpt-oss-120b")
+    assert seen[:2] == ["openai/gpt-oss-120b", "openai/gpt-oss-20b"] and slept == []
+    assert any(e["type"] == "wait" and "switching to openai/gpt-oss-20b" in e["text"] for e in events)
+    # the limited model stays skipped for the next visitor too, until its cool-down ends
+    seen.clear()
+    _run_with(Fake([{"content": "ok"}, {"content": "ok"}]), monkeypatch, ["openai/gpt-oss-20b"],
+              model="openai/gpt-oss-120b")
+    assert seen[0] == "openai/gpt-oss-20b"
+
+
+def test_groq_waits_briefly_when_every_model_is_busy(prefs, monkeypatch):
+    prefs()
+    calls = {"n": 0}
+
+    class Fake(FakeGroq):
+        def create(self, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RateLimited("rate limit")
+            return super().create(**kw)
+
+    run, slept, events = _run_with(Fake([{"content": "ok"}, {"content": "ok"}]), monkeypatch, [])
+    assert len(slept) == 1 and 6 <= slept[0] <= 7
+    assert any(e["type"] == "wait" and "Waiting" in e["text"] for e in events)
+
+
+def test_groq_gives_up_fast_when_the_wait_is_long(prefs, monkeypatch):
+    from src.agent import AIBusy
+    prefs()
+
+    class Fake(FakeGroq):
+        def create(self, **kw):
+            raise type("Busy", (Exception,), {"status_code": 429,
+                                              "response": SimpleNamespace(headers={"retry-after": "45"})})()
+
+    with pytest.raises(AIBusy, match="free-tier limit"):
+        _run_with(Fake([]), monkeypatch, ["openai/gpt-oss-20b"])
+
+
+def test_groq_skips_models_that_no_longer_exist(prefs, monkeypatch):
+    prefs()
+    seen = []
+
+    class Fake(FakeGroq):
+        def create(self, **kw):
+            seen.append(kw["model"])
+            if kw["model"] == "retired-model":
+                raise type("Gone", (Exception,), {"status_code": 404})("model_not_found")
+            return super().create(**kw)
+
+    run, _, _ = _run_with(Fake([{"content": "ok"}, {"content": "ok"}]), monkeypatch, ["openai/gpt-oss-20b"],
+                          model="retired-model")
+    assert seen[:2] == ["retired-model", "openai/gpt-oss-20b"]

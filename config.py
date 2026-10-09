@@ -27,6 +27,7 @@ REQUEST_TIMEOUT_S = 20
 POLITE_DELAY_S = 0.4  # pause between requests so we never hammer the server
 
 # The two all-you-care-to-eat dining halls. "school" is Nutrislice's word for a location.
+# Every other location (Roth Food Court, ...) is discovered from SCHOOLS_URL: see src/locations.py.
 HALLS = {
     "East": {"school_id": 6333, "slug": "east-side-dining", "name": "East Side Dine-In"},
     "West": {"school_id": 6334, "slug": "west-side-dining", "name": "West Side Dine-In"},
@@ -101,13 +102,13 @@ SAMPLE_DIR = DATA_DIR / "sample"
 PREFS_FILE = Path(os.getenv("DINEWOLFIE_PREFS", ROOT / "prefs.json"))
 HISTORY_FILE = Path(os.getenv("DINEWOLFIE_HISTORY", ROOT / "history.json"))
 
-# sample = the menus saved in data/sample/ (default)
-# live   = today's menus, from the cache in data/menus/ (and from Nutrislice only if LIVE_FETCH is on)
-DATA_MODE = os.getenv("DINEWOLFIE_DATA_MODE", "sample").strip().lower()
+# live   = today's menus from Nutrislice, cached in data/menus/ (default)
+# sample = the menus saved in data/sample/ (works offline, any date; used by the tests)
+DATA_MODE = os.getenv("DINEWOLFIE_DATA_MODE", "live").strip().lower()
 
-# Contacting Nutrislice is OFF unless DINEWOLFIE_LIVE_FETCH=on. Only turn it on once SBU
-# Campus Dining has given permission. When off, no request is ever sent.
-LIVE_FETCH = os.getenv("DINEWOLFIE_LIVE_FETCH", "off").strip().lower() in ("on", "1", "true", "yes")
+# SBU Campus Dining has given permission, so contacting Nutrislice is ON by default.
+# DINEWOLFIE_LIVE_FETCH=off sends no request at all (only cached or sample menus are used).
+LIVE_FETCH = os.getenv("DINEWOLFIE_LIVE_FETCH", "on").strip().lower() in ("on", "1", "true", "yes")
 
 # --- Agent -------------------------------------------------------------------
 # fast (default): the code gathers memory + menus first and the model decides in about one call.
@@ -124,6 +125,15 @@ FAST_MAX_TURNS = int(os.getenv("DINEWOLFIE_FAST_MAX_TURNS", "8"))
 # Optional second engine. Any Groq model with tool use works; see console.groq.com/docs/models.
 GROQ_MODEL = os.getenv("DINEWOLFIE_GROQ_MODEL", "openai/gpt-oss-120b").strip()
 GROQ_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+# When a Groq model hits its per-minute limit, the next model in this list is tried at once
+# (Groq's limits are per model, so each one is a separate budget). Unknown or retired models
+# are skipped automatically.
+GROQ_FALLBACK_MODELS = [m.strip() for m in os.getenv(
+    "DINEWOLFIE_GROQ_FALLBACKS",
+    "openai/gpt-oss-20b,llama-3.3-70b-versatile,meta-llama/llama-4-scout-17b-16e-instruct").split(",") if m.strip()]
+# If every AI option is rate-limited, make the plan with the built-in planner (no AI) instead of
+# making the student wait. The plan is labeled so it's clear the AI didn't make it.
+FALLBACK_TO_BUILTIN = os.getenv("DINEWOLFIE_FALLBACK_BUILTIN", "on").strip().lower() in ("on", "1", "true", "yes")
 # How long gpt-oss models think before answering: low | medium | high. Lower = faster, fewer tokens.
 GROQ_REASONING_EFFORT = os.getenv("DINEWOLFIE_GROQ_REASONING", "low").strip().lower() or "low"
 

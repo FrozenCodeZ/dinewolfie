@@ -5,7 +5,7 @@ import json
 import pytest
 
 import config
-from src import storage
+from src import groq_agent, locations, storage
 from src import tools as T
 
 SAMPLE_DATE = "2026-10-01"
@@ -14,6 +14,11 @@ SAMPLE_DATE = "2026-10-01"
 @pytest.fixture(autouse=True)
 def offline_sample(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_MODE", "sample")
+    monkeypatch.setattr(config, "LIVE_FETCH", False)          # tests never touch the network
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "menus")  # nor your real menu cache
+    locations._memo.clear()
+    groq_agent._cooldown.clear()      # rate-limit state is shared per process; start each test clean
+    groq_agent._unavailable.clear()
     monkeypatch.setattr(config, "PREFS_FILE", tmp_path / "prefs.json")
     monkeypatch.setattr(config, "HISTORY_FILE", tmp_path / "history.json")
     T.clear_cache()

@@ -32,9 +32,15 @@ def calls(monkeypatch, tmp_path):
     return sent
 
 
-def test_live_fetch_is_off_by_default():
-    assert config.LIVE_FETCH is False
-    assert config.DATA_MODE == "sample"
+def test_live_fetch_is_on_by_default_now_that_sbu_said_yes():
+    import os
+    import subprocess
+    import sys
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DINEWOLFIE_")}
+    code = ("import dotenv; dotenv.load_dotenv = lambda *a, **k: None\n"  # ignore a local .env
+            "import config; print(config.LIVE_FETCH, config.DATA_MODE)")
+    out = subprocess.run([sys.executable, "-c", code], cwd=config.ROOT, env=env, capture_output=True, text=True)
+    assert out.stdout.split() == ["True", "live"], out.stderr
 
 
 def test_no_request_when_live_fetch_is_off(calls, monkeypatch):

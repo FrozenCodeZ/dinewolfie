@@ -41,7 +41,7 @@ SERVER = "dinewolfie"
 # (name, description, JSON schema, python function, read-only?)
 _DATE = {"type": "string", "description": "YYYY-MM-DD, 'today' or 'tomorrow'. Defaults to today."}
 _MEAL = {"type": "string", "enum": ["breakfast", "brunch", "lunch", "dinner", "late_night"]}
-_HALL = {"type": "string", "enum": ["East", "West"]}
+_HALL = {"type": "string", "description": "East, West, or another SBU location by name (e.g. Roth Food Court)."}
 _STRS = {"type": "array", "items": {"type": "string"}}
 _ITEMS = {"type": "array", "items": {
     "type": "object",
@@ -90,7 +90,9 @@ TOOL_SPECS = [
      "Find menu items that fit constraints, across one or both halls. Automatically applies the user's saved "
      "diet, allergies and dislikes (apply_my_prefs=true). Reports how many items each filter removed. "
      "sort_by: protein | protein_per_calorie | calories_low | calories_high.",
-     _obj({"meal": _MEAL, "hall": {"type": "string", "enum": ["East", "West", "any"]}, "date": _DATE,
+     _obj({"meal": _MEAL, "hall": {"type": "string", "description": "any (East, West and the user's extra "
+                                                                      "places) or one location's name"},
+           "date": _DATE,
            "min_protein_g": {"type": "number"}, "max_calories": {"type": "number"},
            "exclude_allergens": _STRS, "require_tags": {**_STRS, "description": "e.g. vegan, vegetarian, halal"},
            "exclude_keywords": _STRS, "station": {"type": "string"},
@@ -154,11 +156,15 @@ def active_specs(fast: bool = False) -> list[tuple]:
 
 # --- Run state + events -------------------------------------------------------------------
 
+class AIBusy(Exception):
+    """The AI service is rate-limited right now (e.g. every Groq model is at its free-tier limit)."""
+
+
 @dataclass
 class Engine:
     """Which AI runs the agent loop.
 
-    provider: "claude" (Claude Agent SDK) or "groq".
+    provider: "claude" (Claude Agent SDK), "groq", or "builtin" (no AI: src/planner.py).
     api_key:  for Claude, None means "use this computer's Claude plan login";
               for Groq a key is required.
     """
@@ -173,6 +179,8 @@ class Engine:
 
     @property
     def label(self) -> str:
+        if self.provider == "builtin":
+            return "Built-in planner (no AI)"
         if self.provider == "groq":
             return f"Groq ({self.model or config.GROQ_MODEL}, {self.mode})"
         return (f"Claude ({self.model or config.MODEL}, {self.mode}"
@@ -311,9 +319,11 @@ def build_server(fast: bool = False):
 
 # --- Prompt ---------------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are DineWolfie, a meal-planning agent for Stony Brook University's two all-you-care-to-eat \
-dining halls: East Side Dine-In ("East") and West Side Dine-In ("West"). A student tells you a goal; you plan \
-their day of eating from the real menus.
+SYSTEM_PROMPT = """You are DineWolfie, a meal-planning agent for Stony Brook University dining. The main places \
+are the two all-you-care-to-eat halls, East Side Dine-In ("East") and West Side Dine-In ("West"), paid with a \
+meal swipe. Other locations such as Roth Food Court are retail, paid with dining dollars: use one only when the \
+user asks for it or lists it in extra_locations, and mention that it costs dining dollars. A student tells you \
+a goal; you plan their day of eating from the real menus.
 
 Today is {weekday}, {today}; local time {now}. The plan date is {plan_date} ({plan_weekday}) unless the user \
 says otherwise.
@@ -477,13 +487,30 @@ async def run_agent_async(goal: str, plan_date: date | None = None,
     _emit({"type": "goal", "text": goal, "date": plan_date.isoformat(), "followup": bool(resume),
            "engine": engine.label})
     try:
-        if engine.provider == "groq":
+        if engine.provider == "builtin":
+            from src.planner import run_builtin
+            run_builtin(run, goal, plan_date)
+        elif engine.provider == "groq":
             from src.groq_agent import run_groq  # only imported when used
             run_groq(run, goal, plan_date, resume if isinstance(resume, list) else None, engine)
         else:
             await _run_claude(run, goal, plan_date, resume if isinstance(resume, str) else None, engine)
     except Exception as exc:
-        run.error = _explain_error(exc)
+        busy = isinstance(exc, AIBusy) or "rate limit" in str(exc).lower() or "rate_limit" in str(exc).lower()
+        if busy and config.FALLBACK_TO_BUILTIN and run.plan is None:
+            # Don't leave the student waiting: plan without AI, and say so.
+            why = str(exc) if isinstance(exc, AIBusy) else "The AI service is rate-limiting us right now."
+            _emit({"type": "adaptation", "problem": why,
+                   "change": "Made the plan with DineWolfie's built-in planner instead (no AI).", "reason": ""})
+            run.adaptations += 1
+            try:
+                from src.planner import run_builtin
+                run_builtin(run, goal, plan_date, because=why)
+                run.messages = run.session_id = None  # nothing for a follow-up to continue
+            except Exception as inner:
+                run.error = _explain_error(inner)
+        else:
+            run.error = _explain_error(exc)
     finally:
         run.duration_s = round(time.monotonic() - start, 1)
         if run.error:
@@ -521,7 +548,10 @@ def run_agent(goal: str, plan_date: date | None = None, on_event: Callable[[dict
 def engine_from_env() -> Engine:
     """For the terminal and the morning run: DINEWOLFIE_ENGINE=claude|groq plus the matching key,
     DINEWOLFIE_MODE=fast|thorough."""
-    if os.getenv("DINEWOLFIE_ENGINE", "claude").strip().lower() == "groq":
+    which = os.getenv("DINEWOLFIE_ENGINE", "claude").strip().lower()
+    if which == "builtin":
+        return Engine("builtin", None, None, config.MODE)
+    if which == "groq":
         return Engine("groq", os.getenv("GROQ_API_KEY"), config.GROQ_MODEL, config.MODE)
     return Engine("claude", None, None, config.MODE)  # the SDK picks up ANTHROPIC_API_KEY itself if set
 

@@ -1,9 +1,9 @@
 """Download menus from Nutrislice and cache them on disk.
 
-Live fetching is OFF by default (config.LIVE_FETCH): we have asked SBU Campus Dining for
-permission and have not heard back. While it is off, only saved menus are used.
+SBU Campus Dining has given permission, so live fetching is on by default (config.LIVE_FETCH).
+Set DINEWOLFIE_LIVE_FETCH=off to use only saved menus.
 
-Politeness rules when it is on (see README "Data"):
+Politeness rules (see README "Data"):
   * Any refusal or rate limit (HTTP 401/403/429 or a Retry-After header) stops ALL
     fetching for the rest of the run; nothing is retried.
   * One request returns a whole week for one station, and we cache it.
@@ -14,6 +14,8 @@ Politeness rules when it is on (see README "Data"):
 from __future__ import annotations
 
 import json
+import re
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -30,10 +32,16 @@ class FetchError(Exception):
 
 @dataclass
 class Station:
-    hall: str          # "East" / "West"
+    hall: str          # the location's key: "East", "West", "Roth Food Court", ...
     menu_type_id: int
     slug: str
     name: str          # human name, e.g. "Rooted"
+    school_id: int | None = None  # Nutrislice location id (looked up from config.HALLS if missing)
+
+
+# One network fetch at a time across all visitors and the background pre-load, so the same
+# station is never requested twice at once (the second caller then finds it in the cache).
+_fetch_lock = threading.RLock()
 
 
 _last_request_at = 0.0
@@ -104,62 +112,72 @@ def _fresh(wrapped: dict, week_last_day: date) -> bool:
 
 # --- stations ---------------------------------------------------------------
 
-def list_stations(hall: str, offline: bool = False) -> list[Station]:
-    """All active stations (Nutrislice "menu types") for a hall."""
-    if hall not in config.HALLS:
-        raise FetchError(f"Unknown hall {hall!r}; expected one of {list(config.HALLS)}")
+def load_schools(offline: bool = False) -> list[dict]:
+    """Nutrislice's list of every SBU location and its stations (cached on disk for a week)."""
     path = config.CACHE_DIR / "schools.json"
-    wrapped = _read_cache(path)
-    # The list of locations rarely changes, so a week-old copy is fine.
-    stale = wrapped is not None and (
-        date.today() - datetime.fromisoformat(wrapped["fetched_at"]).date()).days >= 7
-    if (wrapped is None or stale) and not offline:
-        try:
-            wrapped = _write_cache(path, config.SCHOOLS_URL, _get_json(config.SCHOOLS_URL))
-        except (requests.RequestException, FetchError) as exc:
-            if wrapped is None:
-                raise FetchError(f"Couldn't load the list of dining locations: {exc}") from exc
+    with _fetch_lock:
+        wrapped = _read_cache(path)
+        # The list of locations rarely changes, so a week-old copy is fine.
+        stale = wrapped is not None and (
+            date.today() - datetime.fromisoformat(wrapped["fetched_at"]).date()).days >= 7
+        if (wrapped is None or stale) and not offline:
+            try:
+                wrapped = _write_cache(path, config.SCHOOLS_URL, _get_json(config.SCHOOLS_URL))
+            except (requests.RequestException, FetchError) as exc:
+                if wrapped is None:
+                    raise FetchError(f"Couldn't load the list of dining locations: {exc}") from exc
     if wrapped is None:
-        raise FetchError("No cached list of dining locations and we're offline.")
+        raise FetchError("No saved list of dining locations, and live fetching is off or offline.")
+    return wrapped["data"]
 
-    school_id = config.HALLS[hall]["school_id"]
-    for school in wrapped["data"]:
-        if school["id"] == school_id:
+
+def list_stations(hall: str, offline: bool = False) -> list[Station]:
+    """All active stations (Nutrislice "menu types") for a location ("East", "Roth Food Court"...)."""
+    from src import locations  # imported here: locations imports this module
+    schools = load_schools(offline=offline)
+    try:
+        loc = locations.get(hall, locations.from_schools(schools))
+    except ValueError as exc:
+        raise FetchError(str(exc)) from exc
+    for school in schools:
+        if school["id"] == loc.school_id:
             return [
-                Station(hall, mt["id"], mt["slug"], mt["name"])
+                Station(loc.key, mt["id"], mt["slug"], mt["name"], loc.school_id)
                 for mt in school.get("active_menu_types", [])
                 if mt["slug"] not in config.SKIP_MENU_TYPE_SLUGS
             ]
-    raise FetchError(f"{config.HALLS[hall]['name']} isn't listed on Nutrislice right now.")
+    raise FetchError(f"{loc.name} isn't listed on Nutrislice right now.")
 
 
 # --- menus --------------------------------------------------------------------
 
 def station_cache_path(station: Station, start: date) -> Path:
-    return config.CACHE_DIR / start.isoformat() / station.hall / f"{station.menu_type_id}-{station.slug}.json"
+    folder = re.sub(r"[^A-Za-z0-9_-]+", "_", station.hall)
+    return config.CACHE_DIR / start.isoformat() / folder / f"{station.menu_type_id}-{station.slug}.json"
 
 
 def fetch_station_week(station: Station, day: date, offline: bool = False) -> tuple[dict, str]:
     """Return (raw week JSON, source) where source is 'cache', 'network' or 'stale-cache'."""
     start = week_start(day)
     path = station_cache_path(station, start)
-    wrapped = _read_cache(path)
-    if wrapped is not None and _fresh(wrapped, start + timedelta(days=6)):
-        return wrapped["data"], "cache"
-    if offline:
-        if wrapped is not None:
-            return wrapped["data"], "stale-cache"
-        raise FetchError(f"No cached menu for {station.hall} {station.name} (offline).")
+    with _fetch_lock:  # re-read inside the lock: another visitor may have just fetched it
+        wrapped = _read_cache(path)
+        if wrapped is not None and _fresh(wrapped, start + timedelta(days=6)):
+            return wrapped["data"], "cache"
+        if offline:
+            if wrapped is not None:
+                return wrapped["data"], "stale-cache"
+            raise FetchError(f"No cached menu for {station.hall} {station.name} (offline).")
 
-    url = config.WEEK_URL.format(school_id=config.HALLS[station.hall]["school_id"],
-                                 menu_type_id=station.menu_type_id,
-                                 y=start.year, m=start.month, d=start.day)
-    try:
-        return _write_cache(path, url, _get_json(url))["data"], "network"
-    except (requests.RequestException, ValueError, FetchError) as exc:
-        if wrapped is not None:
-            return wrapped["data"], "stale-cache"
-        raise FetchError(f"Couldn't load {station.hall} {station.name}: {exc}") from exc
+        school_id = station.school_id or config.HALLS[station.hall]["school_id"]
+        url = config.WEEK_URL.format(school_id=school_id, menu_type_id=station.menu_type_id,
+                                     y=start.year, m=start.month, d=start.day)
+        try:
+            return _write_cache(path, url, _get_json(url))["data"], "network"
+        except (requests.RequestException, ValueError, FetchError) as exc:
+            if wrapped is not None:
+                return wrapped["data"], "stale-cache"
+            raise FetchError(f"Couldn't load {station.hall} {station.name}: {exc}") from exc
 
 
 def fetch_hall_day(hall: str, day: date, offline: bool = False) -> dict:
@@ -185,9 +203,20 @@ def fetch_hall_day(hall: str, day: date, offline: bool = False) -> dict:
 
 
 if __name__ == "__main__":
-    # Quick manual check:  python -m src.fetch_menu
+    # Quick manual checks:
+    #   python -m src.fetch_menu              -> today's East and West menus
+    #   python -m src.fetch_menu --locations  -> every SBU location on Nutrislice
+    #   python -m src.fetch_menu Roth         -> today's menu at one location
+    import sys
+
+    from src import locations
+
+    if "--locations" in sys.argv:
+        for loc in locations.all_locations(offline=False):
+            print(f"{loc.key:40} id {loc.school_id:<6} {loc.kind:8} pays with {loc.paid_with}")
+        raise SystemExit(0)
     today = date.today()
-    for hall in config.HALLS:
+    for hall in sys.argv[1:] or list(config.HALLS):
         result = fetch_hall_day(hall, today)
         n = sum(len(d.get("menu_items", [])) for _, d in result["stations"])
         print(f"{hall}: {len(result['stations'])} stations, {n} raw rows, "

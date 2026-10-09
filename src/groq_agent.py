@@ -20,6 +20,7 @@ and the loop ends the moment the checker accepts the plan.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import date
 
@@ -35,7 +36,57 @@ MAX_RESULT_CHARS = 6_000
 MAX_BAD_TOOL_RETRIES = 2
 MAX_RATE_WAITS = 6
 MAX_WAIT_S = 60
-MAX_COMPLETION_TOKENS = 4096  # one fast-mode reply holds the whole plan (3 meals + swaps)
+MAX_COMPLETION_TOKENS = 2048  # a whole fast-mode plan is ~1,000; a smaller cap may also count less against the limit
+FAST_PER_HALL = 7             # candidates per place in Groq's briefing (Claude gets 10)
+SHORT_WAIT_S = 8              # wait this long at most for a model to free up before giving up on the AI
+WAIT_BUDGET_S = 20            # total waiting per plan before falling back to the built-in planner
+
+# Groq's limits are per organization *and per model*, and shared by every visitor using the same
+# key. So when a model is at its limit we note until when, and every visitor skips it until then.
+_cooldown: dict[str, float] = {}   # model -> time.monotonic() when it may be tried again
+_unavailable: set[str] = set()     # models Groq says don't exist (renamed or retired)
+_models_lock = threading.Lock()
+
+
+def model_chain(primary: str) -> list[str]:
+    """The chosen model first, then the fallbacks, minus models Groq doesn't have."""
+    chain = [primary] + [m for m in config.GROQ_FALLBACK_MODELS if m != primary]
+    with _models_lock:
+        return [m for m in chain if m not in _unavailable]
+
+
+def next_model(primary: str, now: float) -> tuple[str | None, float]:
+    """(first model that isn't cooling down, or None; seconds until the soonest one frees up)."""
+    chain = model_chain(primary)
+    if not chain:
+        raise RuntimeError("None of the Groq models DineWolfie knows are available any more. Pick another "
+                           "model, or set DINEWOLFIE_GROQ_FALLBACKS to current ones from console.groq.com.")
+    with _models_lock:
+        for m in chain:
+            if _cooldown.get(m, 0) <= now:
+                return m, 0.0
+        return None, max(0.0, min((_cooldown.get(m, now) for m in chain), default=now) - now)
+
+
+def _cool(model: str, seconds: float) -> None:
+    with _models_lock:
+        _cooldown[model] = max(_cooldown.get(model, 0), time.monotonic() + seconds)
+
+
+def _missing_model(exc) -> bool:
+    text = str(exc).lower()
+    return getattr(exc, "status_code", None) == 404 or "model_not_found" in text or "decommissioned" in text \
+        or ("model" in text and "does not exist" in text)
+
+
+def _lean_schema(schema):
+    """Tool schemas without nested property descriptions: the model rarely needs them, and every
+    request re-sends every schema. Top-level tool descriptions stay."""
+    if isinstance(schema, dict):
+        return {k: _lean_schema(v) for k, v in schema.items() if k != "description"}
+    if isinstance(schema, list):
+        return [_lean_schema(v) for v in schema]
+    return schema
 
 
 def lean_specs(fast: bool = False) -> list[tuple]:
@@ -43,7 +94,8 @@ def lean_specs(fast: bool = False) -> list[tuple]:
 
 
 def tool_schemas(fast: bool = False) -> list[dict]:
-    return [{"type": "function", "function": {"name": name, "description": desc, "parameters": schema}}
+    return [{"type": "function", "function": {"name": name, "description": desc,
+                                              "parameters": _lean_schema(schema) if fast else schema}}
             for name, desc, schema, _fn, _ro in lean_specs(fast)]
 
 
@@ -160,7 +212,7 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
     if client is None:
         from groq import Groq
         client = Groq(api_key=engine.api_key, max_retries=0, timeout=90)  # we handle waits ourselves
-    model = engine.model or config.GROQ_MODEL
+    primary = engine.model or config.GROQ_MODEL
     fast = engine.fast
     allowed = {spec[0] for spec in lean_specs(fast)}
     tools = tool_schemas(fast)
@@ -171,14 +223,25 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
         first = f"Plan date: {plan_date.isoformat()}.\nMy goal: {goal}"
         if fast:
             from src.briefing import gather
-            first += "\n\n" + gather(plan_date, goal)
+            first += "\n\n" + gather(plan_date, goal, per_hall=FAST_PER_HALL)
         messages = [{"role": "system", "content": A.system_prompt(plan_date, fast) + ("" if fast else GROQ_NOTE)},
                     {"role": "user", "content": first}]
 
-    nudged, bad_tool_retries, waits = False, 0, 0
-    turns = 0
+    nudged, bad_tool_retries, waits, waited = False, 0, 0, 0.0
+    turns, model = 0, primary
     while turns < config.MAX_TURNS:
         shrink_history(messages)
+        model, free_in = next_model(primary, time.monotonic())
+        if model is None:  # every model is at its limit
+            if config.FALLBACK_TO_BUILTIN and (free_in > SHORT_WAIT_S or waited + free_in > WAIT_BUDGET_S):
+                raise A.AIBusy(f"Every Groq model is at its free-tier limit for about {free_in:.0f} more seconds.")
+            if waits >= MAX_RATE_WAITS:
+                raise A.AIBusy("Groq kept rate-limiting us.")
+            waits += 1
+            waited += free_in
+            A._emit({"type": "wait", "text": f"Waiting {free_in:.0f} s for Groq's free-tier limit…"})
+            sleep(free_in)
+            continue
         try:
             resp = client.chat.completions.create(model=model, messages=_wire(messages), tools=tools,
                                                   tool_choice="auto", temperature=0.3,
@@ -186,12 +249,18 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
                                                   **model_options(model))
         except Exception as exc:
             wait = _retry_after(exc)
-            if wait is not None and waits < MAX_RATE_WAITS:
-                waits += 1
+            if wait is not None:
+                _cool(model, wait)
                 if getattr(exc, "status_code", None) == 413:
                     shrink_history(messages, keep=0)  # request too big for the minute: shrink everything
-                A._emit({"type": "wait", "text": f"Waiting {wait:.0f} s for Groq's free-tier limit…"})
-                sleep(wait)
+                following, _ = next_model(primary, time.monotonic())
+                if following:
+                    A._emit({"type": "wait", "text": f"{model} is at Groq's free-tier limit; switching to "
+                                                     f"{following}."})
+                continue
+            if _missing_model(exc):
+                with _models_lock:
+                    _unavailable.add(model)
                 continue
             # Groq rejects a reply whose tool call it couldn't parse; asking again usually works.
             if "tool_use_failed" in str(exc) and bad_tool_retries < MAX_BAD_TOOL_RETRIES:

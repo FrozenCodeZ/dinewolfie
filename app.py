@@ -13,7 +13,7 @@ from datetime import date, timedelta
 import streamlit as st
 
 import config
-from src import access, accounts, notify, storage
+from src import access, accounts, locations, notify, storage
 from src import tools as T
 from src.agent import Engine, default_goal, run_agent
 
@@ -94,7 +94,7 @@ h1, h2, h3, .dw-word { font-family: 'Bricolage Grotesque', sans-serif; letter-sp
 .well-title { margin: 0 0 .35rem; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800;
   font-size: 1.15rem; color: var(--ink); display: flex; justify-content: space-between; align-items: center; }
 .hall { font-family: 'Atkinson Hyperlegible', sans-serif; font-size: .78rem; font-weight: 700;
-  color: #fff; border-radius: 999px; padding: .1rem .6rem; }
+  color: #fff; border-radius: 999px; padding: .1rem .6rem; background: var(--muted); white-space: nowrap; }
 .hall-East { background: var(--navy); } .hall-West { background: var(--red); }
 .food { margin: .45rem 0; }
 .food-name { font-weight: 700; color: var(--ink); line-height: 1.25; }
@@ -244,6 +244,26 @@ def choose_store():
         return st.session_state.store
     return None  # running locally: prefs.json + history.json
 
+
+@st.cache_resource(show_spinner=False)
+def preload_menus(day: str) -> bool:
+    """Once a day per server: fetch today's East and West menus in the background, so the first
+    visitor doesn't wait ~30 s for about 35 polite requests. Visitors who arrive meanwhile wait on
+    the same fetch lock and then read the cache, so nothing is requested twice."""
+    import threading
+
+    def run():
+        for hall in config.HALLS:
+            try:
+                T.load_items(hall, date.fromisoformat(day))
+            except Exception:
+                pass  # the visitor's own request will report the problem
+    threading.Thread(target=run, daemon=True, name="dinewolfie-preload").start()
+    return True
+
+
+if config.LIVE_FETCH and config.DATA_MODE == "live":
+    preload_menus(date.today().isoformat())
 
 STORE = choose_store()
 storage.use(STORE)
@@ -473,43 +493,50 @@ with st.sidebar:
 
     # --- AI engine -----------------------------------------------------------------------
     st.markdown("### AI engine")
-    provider = st.radio("Engine", ["Claude", "Groq"], horizontal=True, key="provider",
-                        help="Claude runs through the Claude Agent SDK. Groq runs an open model "
-                             "through the same tools and checker.").lower()
+    provider = st.radio("Engine", ["Claude", "Groq", "Built-in"], horizontal=True, key="provider",
+                        help="Claude runs through the Claude Agent SDK. Groq runs an open model through the same "
+                             "tools and checker. Built-in needs no AI or key: a simple planner in code (also used "
+                             "automatically when the AI is rate-limited).").lower().replace("-", "")
     key_policy = dict(hosted=HOSTED, auth_enabled=AUTH_ENABLED, signed_in=SIGNED_IN, email=USER_EMAIL,
                       allowed_emails=list(secret("allowed_emails", []) or []),
                       open_to_all=bool(secret("share_keys_with_everyone", False)))
-    env_name = "ANTHROPIC_API_KEY" if provider == "claude" else "GROQ_API_KEY"
-    pasted = st.text_input(f"Your {'Anthropic' if provider == 'claude' else 'Groq'} API key (optional)",
-                           type="password", key=f"key_{provider}",
-                           help="Used only in this browser tab; never saved.")
-    app_key = secret(env_name) or (os.getenv(env_name) if not HOSTED and provider == "groq" else None)
-    api_key, why = access.choose_key(pasted, app_key, **key_policy)
-    if provider == "claude" and api_key is None and not HOSTED:
-        st.caption("Using this computer's Claude plan login.")
-        ENGINE_READY = True
+    if provider == "builtin":
+        st.caption("No AI and no key: picks the most protein for the calories that fits your memory, "
+                   "then runs the same checks.")
+        api_key, why, ENGINE_READY = None, access.NONE, True
+        ENGINE = Engine("builtin")
     else:
-        st.caption(access.explain(why, provider))
-        ENGINE_READY = api_key is not None
-    model_list = config.CLAUDE_MODELS if provider == "claude" else config.GROQ_MODELS
-    default_model = config.MODEL if provider == "claude" else config.GROQ_MODEL
-    if default_model not in model_list:
-        model_list = [default_model] + model_list
-    # On the hosted site the owner's key always runs the default model, so a visitor can't
-    # pick a pricier one on someone else's bill. With your own key (or locally) you choose.
-    locked = HOSTED and why == access.APP
-    model = st.selectbox("Model", model_list, index=model_list.index(default_model), key=f"model_{provider}",
-                         disabled=locked,
-                         help="Listed fastest and cheapest first. Bigger models plan a little better but are "
-                              "slower and cost more." + (" Paste your own key to choose." if locked else ""))
-    if locked:
-        model = default_model
-    speed = st.radio("Speed", ["Fast", "Thorough"], horizontal=True, key="speed",
-                     index=0 if config.MODE != "thorough" else 1,
-                     help="Fast: the app gathers your memory and both halls' menus first, so the AI usually "
-                          "decides in one step (about 10 s). Thorough: the AI does every lookup itself, step "
-                          "by step (slower, but you see more of its reasoning).")
-    ENGINE = Engine(provider, api_key, model, speed.lower())
+        env_name = "ANTHROPIC_API_KEY" if provider == "claude" else "GROQ_API_KEY"
+        pasted = st.text_input(f"Your {'Anthropic' if provider == 'claude' else 'Groq'} API key (optional)",
+                               type="password", key=f"key_{provider}",
+                               help="Used only in this browser tab; never saved.")
+        app_key = secret(env_name) or (os.getenv(env_name) if not HOSTED and provider == "groq" else None)
+        api_key, why = access.choose_key(pasted, app_key, **key_policy)
+        if provider == "claude" and api_key is None and not HOSTED:
+            st.caption("Using this computer's Claude plan login.")
+            ENGINE_READY = True
+        else:
+            st.caption(access.explain(why, provider))
+            ENGINE_READY = api_key is not None
+        model_list = config.CLAUDE_MODELS if provider == "claude" else config.GROQ_MODELS
+        default_model = config.MODEL if provider == "claude" else config.GROQ_MODEL
+        if default_model not in model_list:
+            model_list = [default_model] + model_list
+        # On the hosted site the owner's key always runs the default model, so a visitor can't
+        # pick a pricier one on someone else's bill. With your own key (or locally) you choose.
+        locked = HOSTED and why == access.APP
+        model = st.selectbox("Model", model_list, index=model_list.index(default_model), key=f"model_{provider}",
+                             disabled=locked,
+                             help="Listed fastest and cheapest first. Bigger models plan a little better but are "
+                                  "slower and cost more." + (" Paste your own key to choose." if locked else ""))
+        if locked:
+            model = default_model
+        speed = st.radio("Speed", ["Fast", "Thorough"], horizontal=True, key="speed",
+                         index=0 if config.MODE != "thorough" else 1,
+                         help="Fast: the app gathers your memory and both halls' menus first, so the AI usually "
+                              "decides in one step (about 10 s). Thorough: the AI does every lookup itself, step "
+                              "by step (slower, but you see more of its reasoning).")
+        ENGINE = Engine(provider, api_key, model, speed.lower())
 
     with st.expander("Web nutrition lookup (Tavily)"):
         st.caption("For items the menu lists without nutrition. Results are labeled as web estimates and "
@@ -553,6 +580,12 @@ with st.sidebar:
                                     [d for d in prefs.get("cheat_days") or [] if d in weekdays])
         meals = st.multiselect("Meals to plan", ["breakfast", "lunch", "dinner", "late_night"],
                                prefs.get("meals_to_plan") or ["breakfast", "lunch", "dinner"])
+        other_places = [loc.key for loc in locations.all_locations() if loc.key not in config.HALLS]
+        extra_places = st.multiselect(
+            "Also eat at", other_places, [p for p in prefs.get("extra_locations") or [] if p in other_places],
+            help="Places besides East and West the agent may use, like Roth Food Court. These are paid with "
+                 "dining dollars, not a meal swipe." if other_places else
+                 "Other SBU locations appear here once the app has loaded Nutrislice's list of locations.")
         if st.form_submit_button("Save memory"):
             prefs.update({"name": name, "diet": diet, "allergies": allergies,
                           "daily_protein_goal_g": protein or None, "daily_calorie_goal": calories or None,
@@ -561,7 +594,8 @@ with st.sidebar:
                           "never_eat": [d.strip() for d in never_eat.split(",") if d.strip()],
                           "favorites": [d.strip() for d in favorites.split(",") if d.strip()],
                           "treats": treats, "cheat_days": cheat_days,
-                          "meals_to_plan": meals or ["breakfast", "lunch", "dinner"]})
+                          "meals_to_plan": meals or ["breakfast", "lunch", "dinner"],
+                          "extra_locations": extra_places})
             try:
                 T.write_prefs(prefs)
                 st.toast("Memory saved")
@@ -572,11 +606,12 @@ with st.sidebar:
 
     st.markdown("### Menu data")
     mode = st.radio("Source", ["live", "sample"], index=0 if config.DATA_MODE == "live" else 1, key="data_mode",
-                    horizontal=True, help="sample: saved real menus, works offline. live: today's menus from the "
-                                          "cache on this computer; Nutrislice is only contacted if "
-                                          "DINEWOLFIE_LIVE_FETCH=on (off until SBU Dining gives permission).")
+                    horizontal=True, help="live: today's menus from SBU's Nutrislice (fetched politely and "
+                                          "cached for the day). sample: saved real menus from earlier days; works "
+                                          "offline.")
     if not config.LIVE_FETCH:
-        st.caption("Live fetching from Nutrislice is off. Only menus saved on this computer are used.")
+        st.caption("Live fetching from Nutrislice is switched off (DINEWOLFIE_LIVE_FETCH=off), so only menus "
+                   "already saved are used.")
     T.configure(data_mode=mode)  # per visitor, so one person's choice never changes anyone else's
 
     with st.expander("Demo: break things on purpose"):
@@ -752,7 +787,7 @@ with tab_browse:
                "find each item in the Nutrislice app. Nutrition is per serving.")
     b1, b2, b3 = st.columns(3)
     b_date = b1.date_input("Date", date.today())
-    b_hall = b2.selectbox("Hall", list(config.HALLS))
+    b_hall = b2.selectbox("Location", [loc.key for loc in locations.all_locations()])
     b_meal = b3.selectbox("Meal", ["breakfast", "lunch", "dinner", "late_night"],
                           format_func=lambda m: MEAL_LABEL[m])
     with st.spinner("Loading menu…"):

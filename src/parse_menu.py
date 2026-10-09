@@ -3,9 +3,10 @@
 Real field names are documented in docs/data-notes.md. The output schema is:
 
     {
-      "id": "W1234567",            # hall letter + Nutrislice food id (stable, unique per hall)
+      "id": "W1234567",            # location code + Nutrislice food id: E/W for the halls,
+                                   # "L6401-1234567" for other locations (see src/locations.py)
       "date": "2026-10-03",
-      "hall": "West",
+      "hall": "West",              # the location's key: "East", "West", "Roth Food Court", ...
       "meals": ["lunch"],          # every meal this item is served at
       "station": "Rooted",
       "section": "Rooted Lunch Specials",
@@ -95,8 +96,10 @@ def parse_food(food: dict) -> dict:
     return item
 
 
-def parse_station_day(hall: str, station_slug: str, station_name: str, raw_day: dict) -> list[dict]:
-    """Normalize one station's rows for one day."""
+def parse_station_day(hall: str, station_slug: str, station_name: str, raw_day: dict,
+                      code: str | None = None) -> list[dict]:
+    """Normalize one station's rows for one day. `code` prefixes item ids (default: hall's first letter)."""
+    code = code or hall[0]
     items = []
     header = ""
     for row in sorted(raw_day.get("menu_items", []), key=lambda r: (r.get("menu_id") or 0, r.get("position") or 0)):
@@ -108,7 +111,7 @@ def parse_station_day(hall: str, station_slug: str, station_name: str, raw_day: 
             continue
         item = parse_food(food)
         item.update({
-            "id": f"{hall[0]}{food.get('id')}",
+            "id": f"{code}{food.get('id')}",
             "date": raw_day.get("date"),
             "hall": hall,
             "meals": meals_for_section(header, station_slug),
@@ -132,9 +135,9 @@ def merge_duplicates(items: list[dict]) -> list[dict]:
     return list(by_id.values())
 
 
-def parse_hall_day(hall: str, stations_raw: list) -> list[dict]:
+def parse_hall_day(hall: str, stations_raw: list, code: str | None = None) -> list[dict]:
     """stations_raw is the "stations" list from fetch_menu.fetch_hall_day()."""
     items = []
     for station, raw_day in stations_raw:
-        items.extend(parse_station_day(hall, station.slug, station.name, raw_day))
+        items.extend(parse_station_day(hall, station.slug, station.name, raw_day, code))
     return merge_duplicates(items)

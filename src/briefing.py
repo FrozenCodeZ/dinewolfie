@@ -15,6 +15,7 @@ from datetime import date
 
 import config
 from src import agent as A
+from src import locations
 from src import tools as T
 
 MEAL_WORDS = {"breakfast": "breakfast", "brunch": "brunch", "lunch": "lunch", "dinner": "dinner",
@@ -31,7 +32,7 @@ def meals_for(goal: str, prefs: dict) -> list[str]:
     return meals
 
 
-def _auto(name: str, fn, args: dict) -> dict:
+def run_lookup(name: str, fn, args: dict) -> dict:
     """Run one lookup and report it to the live trace, marked as done by code."""
     A.tool_started(name, args, auto=True)
     try:
@@ -44,13 +45,28 @@ def _auto(name: str, fn, args: dict) -> dict:
     return result
 
 
-def gather(plan_date: date, goal: str) -> str:
+def gather(plan_date: date, goal: str, per_hall: int = T.SCOUT_PER_HALL) -> str:
     """Run the standard lookups and return the briefing text for the model's first message."""
-    prefs = _auto("get_prefs", T.get_prefs, {}).get("prefs") or T.read_prefs()
-    recent = _auto("get_meal_history", T.get_meal_history, {"days": 3}).get("recent_plans", [])
-    scouts = [_auto("scout_meal", T.scout_meal, {"meal": meal, "date": plan_date.isoformat()})
+    prefs = run_lookup("get_prefs", T.get_prefs, {}).get("prefs") or T.read_prefs()
+    recent = run_lookup("get_meal_history", T.get_meal_history, {"days": 3}).get("recent_plans", [])
+    known = locations.all_locations()
+    places = T.considered(prefs, [loc.key for loc in locations.named_in(goal, known)])
+    scouts = [run_lookup("scout_meal", T.scout_meal, {"meal": meal, "date": plan_date.isoformat(),
+                                                  "per_hall": per_hall, "places": places})
               for meal in meals_for(goal, prefs)]
-    return render(prefs, recent, scouts)
+    return render(prefs, recent, scouts, places_line(places, known))
+
+
+def places_line(places: list[str], known: list) -> str:
+    """Which places the candidates come from, how each is paid for, and what else exists."""
+    by_key = {loc.key: loc for loc in known}
+    used = "; ".join(f"{p} ({by_key[p].paid_with})" if p in by_key else p for p in places)
+    others = [loc.key for loc in known if loc.key not in places][:12]
+    line = f"Places scouted: {used}."
+    if others:
+        line += (" Other SBU locations (only if the user asks; search_items with hall=<name>): "
+                 + ", ".join(others) + ".")
+    return line
 
 
 def _num(value) -> str:
@@ -72,13 +88,16 @@ def memory_line(prefs: dict) -> str:
             f"treats {prefs.get('treats') or 'sometimes'}",
             "cheat days: " + ", ".join(prefs["cheat_days"]) if prefs.get("cheat_days") else "",
             "meals to plan: " + ", ".join(prefs.get("meals_to_plan") or config.MEALS),
+            "also eats at: " + ", ".join(prefs["extra_locations"]) if prefs.get("extra_locations") else "",
             "notes: " + "; ".join(map(str, prefs["notes"])) if prefs.get("notes") else ""]
     return "; ".join(b for b in bits if b) + "."
 
 
-def render(prefs: dict, recent: list[dict], scouts: list[dict]) -> str:
+def render(prefs: dict, recent: list[dict], scouts: list[dict], places: str = "") -> str:
     lines = ["BRIEFING (gathered by the app just now; it is current, so don't fetch it again)",
              "Memory: " + memory_line(prefs)]
+    if places:
+        lines.append(places)
     if recent:
         days = []
         for plan in recent[-3:]:

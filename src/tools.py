@@ -20,11 +20,11 @@ from pathlib import Path
 import requests
 
 import config
-from src import storage
+from src import locations, storage
 from src.fetch_menu import FetchError, fetch_hall_day
 from src.parse_menu import parse_hall_day
 
-HALLS = list(config.HALLS)
+HALLS = list(config.HALLS)  # East and West: always considered. Other places only when asked for.
 
 # --- Per-visitor settings ----------------------------------------------------------
 # On the hosted site many people use the app at once, so the demo switches, the data
@@ -109,11 +109,14 @@ def load_items(hall: str, day: date) -> tuple[list[dict], dict]:
         if path is None:
             raise FetchError("No sample data in data/sample/.")
         data = json.loads(path.read_text(encoding="utf-8"))
-        items = data["halls"].get(hall, [])
+        if hall not in data["halls"]:
+            raise FetchError(f"There's no saved sample menu for {hall}; switch Menu data to live.")
+        items = data["halls"][hall]
         meta = {"source": "sample", "note": f"sample data from {data['date']}", "errors": []}
     else:
-        raw = fetch_hall_day(hall, day, offline=offline)
-        items = parse_hall_day(hall, raw["stations"])
+        loc = locations.get(hall)
+        raw = fetch_hall_day(loc.key, day, offline=offline)
+        items = parse_hall_day(loc.key, raw["stations"], loc.code)
         sources = set(raw["sources"].values())
         source = "network" if "network" in sources else ("stale-cache" if "stale-cache" in sources else "cache")
         meta = {"source": source, "errors": raw["errors"]}
@@ -167,6 +170,7 @@ DEFAULT_PREFS = {
     "treats": "sometimes",   # never | sometimes | often
     "cheat_days": [],        # e.g. ["Friday"]: relaxed calories, a treat is welcome
     "meals_to_plan": ["breakfast", "lunch", "dinner"],
+    "extra_locations": [],   # other places to consider besides East and West, e.g. ["Roth Food Court"]
     "notes": [],
 }
 TREAT_LEVELS = ("never", "sometimes", "often")
@@ -209,11 +213,22 @@ def allergen_codes(allergies: list[str]) -> set[str]:
 
 
 def normalize_hall(hall: str) -> str:
-    h = (hall or "").strip().lower()
-    for name in HALLS:
-        if h.startswith(name.lower()):
-            return name
-    raise ValueError(f"Unknown hall {hall!r}. Use one of {HALLS}.")
+    """Any location's key: "west side" -> "West", "roth" -> "Roth Food Court"."""
+    return locations.get(hall).key
+
+
+def considered(prefs: dict | None = None, extra: list[str] | None = None) -> list[str]:
+    """Where to look by default: East, West, the user's extra_locations, and any `extra` named now."""
+    prefs = prefs if prefs is not None else read_prefs()
+    out = list(HALLS)
+    for name in list(prefs.get("extra_locations") or []) + list(extra or []):
+        try:
+            key = normalize_hall(name)
+        except ValueError:
+            continue  # a place that no longer exists on Nutrislice
+        if key not in out:
+            out.append(key)
+    return out
 
 
 def normalize_meal(meal: str) -> str:
@@ -420,8 +435,9 @@ def search_items(meal: str, hall: str = "any", date: str | None = None,
                  apply_my_prefs: bool = True) -> dict:
     day = resolve_date(date)
     meal = normalize_meal(meal)
-    halls = HALLS if (hall or "any").lower() in ("any", "both", "all") else [normalize_hall(hall)]
     prefs = read_prefs() if apply_my_prefs else dict(DEFAULT_PREFS)
+    halls = (considered(read_prefs()) if (hall or "any").lower() in ("any", "both", "all")
+             else [normalize_hall(hall)])
     codes = allergen_codes(list(exclude_allergens or []) + list(prefs["allergies"]))
     diet = list(require_tags or []) + list(prefs["diet"])
     dislikes = list(exclude_keywords or []) + list(prefs["dislikes"])
@@ -481,8 +497,9 @@ def compare_halls(meal: str, date: str | None = None, min_protein_g: float | Non
                   max_calories: float | None = None) -> dict:
     day = resolve_date(date)
     meal = normalize_meal(meal)
+    places = considered()
     report = {}
-    for h in HALLS:
+    for h in places:
         res = search_items(meal, hall=h, date=day.isoformat(), min_protein_g=min_protein_g,
                            max_calories=max_calories, sort_by="protein", limit=40)
         top = res["items"][:3]
@@ -492,7 +509,7 @@ def compare_halls(meal: str, date: str | None = None, min_protein_g: float | Non
             "best_protein_items": [f"{i['name']} ({i['protein_g']} g protein, {i['calories']} kcal)" for i in top],
             "protein_from_top_3_g": sum(i["protein_g"] or 0 for i in top),
         }
-    posted = [h for h in HALLS if report[h]["menu_status"] == "ok"]
+    posted = [h for h in places if report[h]["menu_status"] == "ok"]
     if not posted:
         return {"status": "no_menu_posted", "meal": meal, "date": day.isoformat(), "halls": report,
                 "better_hall_by_protein": None,
@@ -519,7 +536,7 @@ def compare_halls(meal: str, date: str | None = None, min_protein_g: float | Non
     best = ranked[0]
     summary = (f"For {meal} {day.isoformat()}: " + "; ".join(
         f"{h} {report[h]['matching_items']} matches, top-3 protein {report[h]['protein_from_top_3_g']} g"
-        if report[h]["menu_status"] == "ok" else f"{h} {report[h]['menu_status']}" for h in HALLS)
+        if report[h]["menu_status"] == "ok" else f"{h} {report[h]['menu_status']}" for h in places)
         + f". Edge: {best}.")
     return {"status": "ok", "meal": meal, "date": day.isoformat(),
             "halls": report, "better_hall_by_protein": best, "summary": summary}
@@ -528,7 +545,8 @@ def compare_halls(meal: str, date: str | None = None, min_protein_g: float | Non
 SCOUT_PER_HALL = 10
 
 
-def scout_meal(meal: str, date: str | None = None, per_hall: int = SCOUT_PER_HALL) -> dict:
+def scout_meal(meal: str, date: str | None = None, per_hall: int = SCOUT_PER_HALL,
+               places: list[str] | None = None) -> dict:
     """Fast mode: one meal's best candidates at each hall, already filtered by the user's memory.
 
     Favorites first, then the highest-protein items, then the most protein per calorie (for
@@ -539,8 +557,9 @@ def scout_meal(meal: str, date: str | None = None, per_hall: int = SCOUT_PER_HAL
     prefs = read_prefs()
     codes = allergen_codes(prefs["allergies"])
     favorites = list(prefs.get("favorites") or [])
+    places = places or considered(prefs)
     halls = {}
-    for h in HALLS:
+    for h in places:
         items, meta = _menu(h, meal, day)
         if meta["status"] != "ok":
             halls[h] = {"status": meta["status"], "fits": 0, "items": [], "error": meta.get("error")}
@@ -572,11 +591,11 @@ def scout_meal(meal: str, date: str | None = None, per_hall: int = SCOUT_PER_HAL
             rows.append(row)
         halls[h] = {"status": "ok" if fits else "no_matches", "fits": len(fits), "items": rows}
 
-    posted = [h for h in HALLS if halls[h]["status"] != "no_menu_posted" and halls[h]["status"] != "error"]
-    status = ("ok" if any(halls[h]["status"] == "ok" for h in HALLS)
+    posted = [h for h in places if halls[h]["status"] != "no_menu_posted" and halls[h]["status"] != "error"]
+    status = ("ok" if any(halls[h]["status"] == "ok" for h in places)
               else "no_matches" if posted else "no_menu_posted")
     parts = []
-    for h in HALLS:
+    for h in places:
         info = halls[h]
         if info["status"] == "ok":
             best = max(info["items"], key=lambda r: r["protein_g"] or 0)
@@ -601,11 +620,11 @@ def get_item_details(ids: list[str], date: str | None = None) -> dict:
 
 def find_item(item_id: str, day: date) -> dict | None:
     item_id = str(item_id).strip()
-    hall = next((h for h in HALLS if item_id.upper().startswith(h[0])), None)
-    if not hall:
+    loc = locations.for_item_id(item_id)
+    if loc is None:
         return None
     try:
-        items, _ = load_items(hall, day)
+        items, _ = load_items(loc.key, day)
     except FetchError:
         return None
     return next((dict(i) for i in items if i["id"].upper() == item_id.upper()), None)
