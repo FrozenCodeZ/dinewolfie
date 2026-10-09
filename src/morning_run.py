@@ -16,7 +16,7 @@ from datetime import date, datetime
 
 import config
 from src import notify
-from src.agent import default_goal, run_agent
+from src.agent import default_goal, engine_from_env, run_agent
 from src.tools import read_prefs
 
 LOG_DIR = config.DATA_DIR / "logs"
@@ -44,7 +44,7 @@ def main() -> int:
             log.flush()
 
         goal = default_goal(read_prefs())
-        run = run_agent(goal, on_event=on_event)
+        run = run_agent(goal, on_event=on_event, engine=engine_from_env())
 
     if run.plan:
         title, body = notify.plan_message(run.plan)

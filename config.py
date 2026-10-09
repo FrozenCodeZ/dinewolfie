@@ -113,6 +113,8 @@ LIVE_FETCH = os.getenv("DINEWOLFIE_LIVE_FETCH", "off").strip().lower() in ("on",
 MODEL = os.getenv("DINEWOLFIE_MODEL", "claude-opus-5-5").strip() or None
 EFFORT = os.getenv("DINEWOLFIE_EFFORT", "medium").strip() or None
 MAX_TURNS = int(os.getenv("DINEWOLFIE_MAX_TURNS", "40"))
+# Optional second engine. Any Groq model with tool use works; see console.groq.com/docs/models.
+GROQ_MODEL = os.getenv("DINEWOLFIE_GROQ_MODEL", "openai/gpt-oss-120b").strip()
 
 # --- Notifications -------------------------------------------------------------
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").rstrip("/")

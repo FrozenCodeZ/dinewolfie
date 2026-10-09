@@ -13,24 +13,49 @@ from __future__ import annotations
 import json
 import os
 import re
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import requests
+
 import config
+from src import storage
 from src.fetch_menu import FetchError, fetch_hall_day
 from src.parse_menu import parse_hall_day
 
 HALLS = list(config.HALLS)
 
+# --- Per-visitor settings ----------------------------------------------------------
+# On the hosted site many people use the app at once, so the demo switches, the data
+# mode and the Tavily key live in a ContextVar (one value per session) instead of globals.
+_DEFAULT_SESSION = {"missing": frozenset(), "offline": False, "data_mode": None, "tavily_key": None}
+_session: ContextVar = ContextVar("dinewolfie_session", default=_DEFAULT_SESSION)
+
+
+def _settings() -> dict:
+    return _session.get()
+
+
+def configure(**changes) -> None:
+    """Change this session's settings: data_mode='sample', tavily_key='tvly-...', etc."""
+    _session.set({**_session.get(), **changes})
+
+
+def data_mode() -> str:
+    return _settings()["data_mode"] or config.DATA_MODE
+
+
+def tavily_key() -> str | None:
+    return _settings()["tavily_key"] or os.getenv("TAVILY_API_KEY") or None
+
+
 # --- Demo "chaos" switches ------------------------------------------------------
 # Lets you show on camera how the agent adapts when things break. The agent is
 # NOT told these are simulated; it just sees a missing menu or a network error.
-SIMULATION = {"missing": set(), "offline": False}
-
 
 def set_simulation(missing: list[tuple[str, str]] | None = None, offline: bool = False) -> None:
-    SIMULATION["missing"] = {(h.title(), m.lower()) for h, m in (missing or [])}
-    SIMULATION["offline"] = bool(offline)
+    configure(missing=frozenset((h.title(), m.lower()) for h, m in (missing or [])), offline=bool(offline))
 
 
 def _load_simulation_from_env() -> None:
@@ -47,6 +72,7 @@ def _load_simulation_from_env() -> None:
 
 
 _load_simulation_from_env()
+_DEFAULT_SESSION.update(_session.get())  # env switches (CLI) become the default for every session
 
 
 # --- Dates ----------------------------------------------------------------------
@@ -73,11 +99,12 @@ def _sample_file(day: date) -> Path | None:
 
 def load_items(hall: str, day: date) -> tuple[list[dict], dict]:
     """All normalized items for a hall on a day, plus where they came from."""
-    key = (hall, day, config.DATA_MODE, SIMULATION["offline"])
+    offline = _settings()["offline"]
+    key = (hall, day, data_mode(), offline)
     if key in _day_cache:
         return _day_cache[key]
 
-    if config.DATA_MODE == "sample":
+    if data_mode() == "sample":
         path = _sample_file(day)
         if path is None:
             raise FetchError("No sample data in data/sample/.")
@@ -85,7 +112,6 @@ def load_items(hall: str, day: date) -> tuple[list[dict], dict]:
         items = data["halls"].get(hall, [])
         meta = {"source": "sample", "note": f"sample data from {data['date']}", "errors": []}
     else:
-        offline = SIMULATION["offline"]
         raw = fetch_hall_day(hall, day, offline=offline)
         items = parse_hall_day(hall, raw["stations"])
         sources = set(raw["sources"].values())
@@ -108,7 +134,7 @@ def _menu(hall: str, meal: str, day: date) -> tuple[list[dict], dict]:
     """Items for one hall + meal. Status is 'ok', 'no_menu_posted' or 'error'."""
     hall = normalize_hall(hall)
     meal = normalize_meal(meal)
-    if (hall, meal) in SIMULATION["missing"]:
+    if (hall, meal) in _settings()["missing"]:
         return [], {"status": "no_menu_posted", "source": "nutrislice", "errors": []}
     try:
         items, meta = load_items(hall, day)
@@ -167,13 +193,12 @@ ALLERGY_WORDS = {
 
 def read_prefs() -> dict:
     prefs = dict(DEFAULT_PREFS)
-    if config.PREFS_FILE.exists():
-        prefs.update(json.loads(config.PREFS_FILE.read_text(encoding="utf-8")))
+    prefs.update(storage.current().load_prefs() or {})
     return prefs
 
 
 def write_prefs(prefs: dict) -> None:
-    config.PREFS_FILE.write_text(json.dumps(prefs, indent=2) + "\n", encoding="utf-8")
+    storage.current().save_prefs(prefs)
 
 
 def allergen_codes(allergies: list[str]) -> set[str]:
@@ -647,15 +672,42 @@ def submit_plan(plan: dict | None = None, **fields) -> dict:
 # --- History (memory of past plans) ------------------------------------------------------
 
 def read_history() -> list[dict]:
-    if config.HISTORY_FILE.exists():
-        try:
-            return json.loads(config.HISTORY_FILE.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return []
-    return []
+    return storage.current().load_history()
 
 
 def append_history(plan: dict) -> None:
     history = read_history()
     history.append({"date": plan["date"], "goal": plan.get("goal", ""), "plan": plan})
-    config.HISTORY_FILE.write_text(json.dumps(history[-60:], indent=2), encoding="utf-8")
+    storage.current().save_history(history)
+
+
+# --- Web nutrition lookup (Tavily) --------------------------------------------------------
+
+def lookup_nutrition(item_name: str, details: str = "") -> dict:
+    """Search the web for typical nutrition of an item SBU's menu lists without nutrition.
+
+    The result is an estimate from the web, not SBU data: it's shown to the user labeled
+    as such and never added to plan totals (sum_nutrition and the checker only use menu data).
+    """
+    key = tavily_key()
+    if not key:
+        return {"status": "error", "error": "Web lookup isn't set up (no Tavily key).",
+                "summary": "Web nutrition lookup is off."}
+    query = f"{item_name} {details} nutrition facts per serving calories protein".strip()
+    try:
+        resp = requests.post("https://api.tavily.com/search", timeout=20,
+                             headers={"Authorization": f"Bearer {key}"},
+                             json={"query": query, "search_depth": "basic", "max_results": 3,
+                                   "include_answer": "basic"})
+    except requests.RequestException as exc:
+        return {"status": "error", "error": f"Web lookup failed: {exc}", "summary": "Web lookup failed."}
+    if resp.status_code != 200:
+        return {"status": "error", "error": f"Web lookup failed (HTTP {resp.status_code}).",
+                "summary": f"Web lookup failed (HTTP {resp.status_code})."}
+    data = resp.json()
+    sources = [{"title": r.get("title", ""), "url": r.get("url", ""), "snippet": (r.get("content") or "")[:300]}
+               for r in data.get("results", [])[:3]]
+    return {"status": "ok", "item": item_name, "answer": data.get("answer") or "", "sources": sources,
+            "note": "Web estimate for a typical version of this dish, not SBU's recipe. Tell the user it's an "
+                    "estimate and don't add these numbers to plan totals.",
+            "summary": f"Looked up typical nutrition for {item_name} on the web ({len(sources)} sources)."}

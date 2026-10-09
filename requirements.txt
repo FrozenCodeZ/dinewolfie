@@ -4,3 +4,8 @@ streamlit==1.65.0
 requests==2.34.2
 python-dotenv==1.2.4
 pytest==9.1.1
+
+# Hosted site: Groq engine, Google Sheet accounts, Google sign-in
+groq==1.7.0
+gspread==6.2.1
+Authlib==1.8.0

@@ -18,6 +18,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from contextvars import ContextVar
 from typing import Any, Callable
 
 from claude_agent_sdk import (
@@ -125,19 +126,51 @@ TOOL_SPECS = [
            "tips": {**_STRS, "description": "Optional practical tips, e.g. how to close a protein gap."}},
           ["date", "meals", "headline"]),
      T.submit_plan, False),
+    ("lookup_nutrition",
+     "Search the web for typical nutrition of a dish ONLY when SBU's menu lists it without nutrition. "
+     "Results are estimates for a typical version, not SBU's recipe: say so, and never add them to totals.",
+     _obj({"item_name": {"type": "string"}, "details": {"type": "string", "description": "Optional: size, style"}},
+          ["item_name"]),
+     T.lookup_nutrition, True),
 ]
 TOOL_NAMES = [spec[0] for spec in TOOL_SPECS]
+
+
+def active_specs() -> list[tuple]:
+    """The tools this run can use: the web lookup only when a Tavily key is set."""
+    return [s for s in TOOL_SPECS if s[0] != "lookup_nutrition" or T.tavily_key()]
 
 
 # --- Run state + events -------------------------------------------------------------------
 
 @dataclass
+class Engine:
+    """Which AI runs the agent loop.
+
+    provider: "claude" (Claude Agent SDK) or "groq".
+    api_key:  for Claude, None means "use this computer's Claude plan login";
+              for Groq a key is required.
+    """
+    provider: str = "claude"
+    api_key: str | None = None
+    model: str | None = None
+
+    @property
+    def label(self) -> str:
+        if self.provider == "groq":
+            return f"Groq ({self.model or config.GROQ_MODEL})"
+        return f"Claude ({self.model or config.MODEL}{', API key' if self.api_key else ', Claude plan'})"
+
+
+@dataclass
 class AgentRun:
     goal: str
+    engine: str = "claude"
     plan: dict | None = None
     reply: str = ""
     events: list[dict] = field(default_factory=list)
-    session_id: str | None = None
+    session_id: str | None = None       # Claude: lets a follow-up continue the conversation
+    messages: list[dict] | None = None  # Groq: the conversation so far, for follow-ups
     error: str | None = None
     num_turns: int = 0
     duration_s: float = 0.0
@@ -146,56 +179,22 @@ class AgentRun:
     adaptations: int = 0
 
 
-_current: dict[str, Any] = {"run": None, "on_event": None}
+# One value per session/thread, so two people using the hosted app never share a run.
+_current: ContextVar = ContextVar("dinewolfie_run", default=None)
 
 
 def _emit(event: dict) -> None:
+    state = _current.get()
+    if state is None:
+        return
     event.setdefault("t", round(time.monotonic(), 2))
-    run: AgentRun | None = _current["run"]
-    if run is not None:
-        run.events.append(event)
-    callback = _current["on_event"]
+    state["run"].events.append(event)
+    callback = state["on_event"]
     if callback is not None:
         try:
             callback(event)
         except Exception:  # the UI must never crash the agent
             pass
-
-
-def _wrap(name: str, description: str, schema: dict, fn: Callable, read_only: bool):
-    """Turn a plain function into an SDK tool that also reports to the trace."""
-
-    @tool(name, description, schema,
-          annotations=ToolAnnotations(readOnlyHint=read_only, maxResultSizeChars=200_000))
-    async def handler(args: dict[str, Any]) -> dict[str, Any]:
-        _emit({"type": "tool_call", "tool": name, "input": args})
-        run: AgentRun | None = _current["run"]
-        if run is not None:
-            run.tool_calls += 1
-        try:
-            result = await asyncio.to_thread(fn, **args)
-        except Exception as exc:  # report the failure to Claude so it can adapt
-            message = f"{type(exc).__name__}: {exc}"
-            _emit({"type": "tool_result", "tool": name, "ok": False, "summary": message})
-            return {"content": [{"type": "text", "text": json.dumps({"status": "error", "error": message})}],
-                    "is_error": True}
-        status = result.get("status", "ok")
-        ok = status in ("ok", "accepted")
-        _emit({"type": "tool_result", "tool": name, "ok": ok, "status": status,
-               "summary": result.get("summary", ""), "data": _trace_data(name, result)})
-        if name == "make_plan":
-            _emit({"type": "plan", "steps": result.get("steps", [])})
-        if name == "log_adaptation":
-            if run is not None:
-                run.adaptations += 1
-            _emit({"type": "adaptation", "problem": args.get("problem", ""), "change": args.get("change", ""),
-                   "reason": args.get("reason", "")})
-        if name == "submit_plan" and status == "accepted" and run is not None:
-            run.plan = result["plan"]
-            _emit({"type": "final_plan", "plan": result["plan"]})
-        return {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}
-
-    return handler
 
 
 def _trace_data(name: str, result: dict) -> dict:
@@ -215,9 +214,72 @@ def _trace_data(name: str, result: dict) -> dict:
     return {}
 
 
+def tool_started(name: str, args: dict) -> None:
+    _emit({"type": "tool_call", "tool": name, "input": args})
+    state = _current.get()
+    if state is not None:
+        state["run"].tool_calls += 1
+
+
+def tool_finished(name: str, args: dict, result: dict | None, error: str | None = None) -> None:
+    """Report a tool's outcome to the trace. Shared by the Claude and Groq loops."""
+    state = _current.get()
+    run = state["run"] if state else None
+    if error is not None:
+        _emit({"type": "tool_result", "tool": name, "ok": False, "summary": error})
+        return
+    status = result.get("status", "ok")
+    _emit({"type": "tool_result", "tool": name, "ok": status in ("ok", "accepted"), "status": status,
+           "summary": result.get("summary", ""), "data": _trace_data(name, result)})
+    if name == "make_plan":
+        _emit({"type": "plan", "steps": result.get("steps", [])})
+    if name == "log_adaptation":
+        if run is not None:
+            run.adaptations += 1
+        _emit({"type": "adaptation", "problem": args.get("problem", ""), "change": args.get("change", ""),
+               "reason": args.get("reason", "")})
+    if name == "submit_plan" and status == "accepted" and run is not None:
+        run.plan = result["plan"]
+        _emit({"type": "final_plan", "plan": result["plan"]})
+
+
+def call_tool(name: str, args: dict) -> tuple[dict, bool]:
+    """Run one tool synchronously and report it. Returns (result, is_error)."""
+    fn = next(spec[3] for spec in TOOL_SPECS if spec[0] == name)
+    tool_started(name, args)
+    try:
+        result = fn(**args)
+    except Exception as exc:  # report the failure to the model so it can adapt
+        message = f"{type(exc).__name__}: {exc}"
+        tool_finished(name, args, None, message)
+        return {"status": "error", "error": message}, True
+    tool_finished(name, args, result)
+    return result, False
+
+
+def _wrap(name: str, description: str, schema: dict, fn: Callable, read_only: bool):
+    """Turn a plain function into an SDK tool that also reports to the trace."""
+
+    @tool(name, description, schema,
+          annotations=ToolAnnotations(readOnlyHint=read_only, maxResultSizeChars=200_000))
+    async def handler(args: dict[str, Any]) -> dict[str, Any]:
+        tool_started(name, args)
+        try:
+            result = await asyncio.to_thread(fn, **args)
+        except Exception as exc:  # report the failure to Claude so it can adapt
+            message = f"{type(exc).__name__}: {exc}"
+            tool_finished(name, args, None, message)
+            return {"content": [{"type": "text", "text": json.dumps({"status": "error", "error": message})}],
+                    "is_error": True}
+        tool_finished(name, args, result)
+        return {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}
+
+    return handler
+
+
 def build_server():
     return create_sdk_mcp_server(name=SERVER, version="1.0.0",
-                                 tools=[_wrap(*spec) for spec in TOOL_SPECS])
+                                 tools=[_wrap(*spec) for spec in active_specs()])
 
 
 # --- Prompt ---------------------------------------------------------------------------------
@@ -267,10 +329,10 @@ A one-off wish ("I want pizza today") is not a preference.
 - If the goal can't be reached, build the closest plan, say how many grams short it is, and give one concrete \
 fix (for example "add a second Greek yogurt at breakfast").
 - Weekends may have brunch instead of separate breakfast and lunch; breakfast/lunch searches include brunch items.
-"""
+{lookup_line}"""
 
 
-def build_options(plan_date: date, resume: str | None = None) -> ClaudeAgentOptions:
+def system_prompt(plan_date: date) -> str:
     now = datetime.now()
     prefs = T.read_prefs()
     name_line = (f"The user's name is {prefs['name']}; use it once, naturally." if prefs.get("name")
@@ -279,23 +341,34 @@ def build_options(plan_date: date, resume: str | None = None) -> ClaudeAgentOpti
                   "most enjoyable options that still respect allergies, diet and never_eat, include a treat, "
                   "and mention it's a cheat day." if T.is_cheat_day(plan_date, prefs)
                   else "The plan date is not a cheat day.")
-    system = SYSTEM_PROMPT.format(weekday=now.strftime("%A"), today=now.date().isoformat(),
-                                  now=now.strftime("%H:%M"), plan_date=plan_date.isoformat(),
-                                  plan_weekday=plan_date.strftime("%A"), name_line=name_line,
-                                  treats=prefs.get("treats") or "sometimes", cheat_line=cheat_line)
+    lookup_line = ("- If an item you want to recommend has no nutrition listed, you may call lookup_nutrition once "
+                   "for it. Present the result as 'about X g protein (web estimate)' and keep it out of totals.\n"
+                   if T.tavily_key() else "")
+    return SYSTEM_PROMPT.format(weekday=now.strftime("%A"), today=now.date().isoformat(),
+                                now=now.strftime("%H:%M"), plan_date=plan_date.isoformat(),
+                                plan_weekday=plan_date.strftime("%A"), name_line=name_line,
+                                treats=prefs.get("treats") or "sometimes", cheat_line=cheat_line,
+                                lookup_line=lookup_line)
+
+
+def build_options(plan_date: date, resume: str | None = None, engine: Engine | None = None) -> ClaudeAgentOptions:
+    engine = engine or Engine()
+    env = {"ENABLE_TOOL_SEARCH": "false"}  # load all tool schemas up front
+    if engine.api_key:
+        env["ANTHROPIC_API_KEY"] = engine.api_key  # bill this key instead of a Claude plan login
     return ClaudeAgentOptions(
-        system_prompt=system,
+        system_prompt=system_prompt(plan_date),
         mcp_servers={SERVER: build_server()},
-        allowed_tools=[f"mcp__{SERVER}__{name}" for name in TOOL_NAMES],
+        allowed_tools=[f"mcp__{SERVER}__{spec[0]}" for spec in active_specs()],
         tools=[],                      # no built-in Claude Code tools (no shell, no files): only ours
         setting_sources=[],            # ignore the user's Claude Code settings/plugins
-        model=config.MODEL,
+        model=engine.model or config.MODEL,
         effort=config.EFFORT,
         thinking={"type": "adaptive", "display": "summarized"},
         max_turns=config.MAX_TURNS,
         cwd=str(config.ROOT),
         resume=resume,
-        env={"ENABLE_TOOL_SEARCH": "false"},  # load all 11 tool schemas up front
+        env=env,
     )
 
 
@@ -303,36 +376,45 @@ def _short_name(tool_name: str) -> str:
     return tool_name.split("__")[-1]
 
 
-async def run_agent_async(goal: str, plan_date: date | None = None,
-                          on_event: Callable[[dict], None] | None = None,
-                          resume: str | None = None) -> AgentRun:
-    plan_date = plan_date or date.today()
-    run = AgentRun(goal=goal)
-    _current.update(run=run, on_event=on_event)
-    start = time.monotonic()
-    if os.getenv("ANTHROPIC_API_KEY"):
+async def _run_claude(run: AgentRun, goal: str, plan_date: date, resume: str | None, engine: Engine) -> None:
+    if os.getenv("ANTHROPIC_API_KEY") and not engine.api_key:
         _emit({"type": "warning", "text": "ANTHROPIC_API_KEY is set, so this run bills your API account "
                                           "instead of your Claude plan."})
-    _emit({"type": "goal", "text": goal, "date": plan_date.isoformat(), "followup": bool(resume)})
     prompt = goal if resume else f"Plan date: {plan_date.isoformat()}.\nMy goal: {goal}"
+    async for message in query(prompt=prompt, options=build_options(plan_date, resume, engine)):
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, ThinkingBlock) and block.thinking.strip():
+                    _emit({"type": "thinking", "text": block.thinking.strip()})
+                elif isinstance(block, TextBlock) and block.text.strip():
+                    _emit({"type": "text", "text": block.text.strip()})
+        elif isinstance(message, ResultMessage):
+            run.session_id = message.session_id
+            run.num_turns = message.num_turns
+            run.cost_usd = message.total_cost_usd
+            if message.is_error:
+                run.error = message.result or message.subtype
+            else:
+                run.reply = message.result or ""
+
+
+async def run_agent_async(goal: str, plan_date: date | None = None,
+                          on_event: Callable[[dict], None] | None = None,
+                          resume: str | list | None = None, engine: Engine | None = None) -> AgentRun:
+    """Run the agent once. `resume` continues a conversation: a Claude session id, or Groq messages."""
+    engine = engine or Engine()
+    plan_date = plan_date or date.today()
+    run = AgentRun(goal=goal, engine=engine.provider)
+    token = _current.set({"run": run, "on_event": on_event})
+    start = time.monotonic()
+    _emit({"type": "goal", "text": goal, "date": plan_date.isoformat(), "followup": bool(resume),
+           "engine": engine.label})
     try:
-        async for message in query(prompt=prompt, options=build_options(plan_date, resume)):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, ThinkingBlock) and block.thinking.strip():
-                        _emit({"type": "thinking", "text": block.thinking.strip()})
-                    elif isinstance(block, TextBlock) and block.text.strip():
-                        _emit({"type": "text", "text": block.text.strip()})
-                    elif isinstance(block, ToolUseBlock):
-                        pass  # reported by the tool wrapper with its result
-            elif isinstance(message, ResultMessage):
-                run.session_id = message.session_id
-                run.num_turns = message.num_turns
-                run.cost_usd = message.total_cost_usd
-                if message.is_error:
-                    run.error = message.result or message.subtype
-                else:
-                    run.reply = message.result or ""
+        if engine.provider == "groq":
+            from src.groq_agent import run_groq  # only imported when used
+            run_groq(run, goal, plan_date, resume if isinstance(resume, list) else None, engine)
+        else:
+            await _run_claude(run, goal, plan_date, resume if isinstance(resume, str) else None, engine)
     except Exception as exc:
         run.error = _explain_error(exc)
     finally:
@@ -343,7 +425,7 @@ async def run_agent_async(goal: str, plan_date: date | None = None,
             _emit({"type": "warning", "text": "The agent finished without an accepted plan."})
         _emit({"type": "done", "seconds": run.duration_s, "tool_calls": run.tool_calls,
                "turns": run.num_turns, "adaptations": run.adaptations})
-        _current.update(run=None, on_event=None)
+        _current.reset(token)
     return run
 
 
@@ -355,13 +437,25 @@ def _explain_error(exc: Exception) -> str:
                 "(sign in with your Claude plan), then try again.")
     if "not found" in text.lower() and "claude" in text.lower():
         return "Claude Code isn't installed. See README > Setup."
+    low = text.lower()
+    if "invalid x-api-key" in low or "authentication_error" in low or "invalid api key" in low:
+        return "That API key was rejected. Check it in the sidebar (no extra spaces) and try again."
+    if "rate limit" in low or "rate_limit" in low:
+        return "The AI service is rate-limiting us. Wait a minute and try again, or switch engines in the sidebar."
     return f"{type(exc).__name__}: {text}"
 
 
-def run_agent(goal: str, plan_date: date | None = None,
-              on_event: Callable[[dict], None] | None = None, resume: str | None = None) -> AgentRun:
+def run_agent(goal: str, plan_date: date | None = None, on_event: Callable[[dict], None] | None = None,
+              resume: str | list | None = None, engine: Engine | None = None) -> AgentRun:
     """Synchronous wrapper (for scripts and Streamlit)."""
-    return asyncio.run(run_agent_async(goal, plan_date, on_event, resume))
+    return asyncio.run(run_agent_async(goal, plan_date, on_event, resume, engine))
+
+
+def engine_from_env() -> Engine:
+    """For the terminal and the morning run: DINEWOLFIE_ENGINE=claude|groq plus the matching key."""
+    if os.getenv("DINEWOLFIE_ENGINE", "claude").strip().lower() == "groq":
+        return Engine("groq", os.getenv("GROQ_API_KEY"), config.GROQ_MODEL)
+    return Engine("claude", None)  # the SDK picks up ANTHROPIC_API_KEY itself if it's set
 
 
 def default_goal(prefs: dict | None = None) -> str:

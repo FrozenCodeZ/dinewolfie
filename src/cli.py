@@ -14,7 +14,7 @@ import sys
 
 import config
 from src import tools as T
-from src.agent import default_goal, run_agent
+from src.agent import default_goal, engine_from_env, run_agent
 
 if os.name == "nt":
     os.system("")  # turn on ANSI colors in the Windows console
@@ -113,7 +113,7 @@ def main() -> int:
         os.environ["DINEWOLFIE_SIMULATE"] = args.simulate
         T._load_simulation_from_env()
     goal = " ".join(args.goal) or default_goal()
-    run = run_agent(goal, plan_date=T.resolve_date(args.date), on_event=print_event)
+    run = run_agent(goal, plan_date=T.resolve_date(args.date), on_event=print_event, engine=engine_from_env())
     if run.plan:
         print("\n" + format_plan(run.plan))
     if run.reply:

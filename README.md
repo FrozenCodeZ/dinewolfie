@@ -160,6 +160,14 @@ You ──goal──▶ Claude (Agent SDK loop) ──tools──▶ Nutrislice 
 | `src/morning_run.py`, `src/notify.py` | Scheduled run and ntfy push |
 | `docs/data-notes.md` | The real Nutrislice endpoints and field names |
 
+## Hosted website
+
+The public site can't use your Claude login, so it lets you pick **Claude** (Anthropic API key) or **Groq** (free tier) in the sidebar. Keys come from the visitor or from your Streamlit secrets (only signed-in users can use yours). People **sign in with Google**, and each person's memory is saved to a **Google Sheet**. Guests get memory that lasts only for their browser tab. An optional **Tavily** key lets the agent look up nutrition for items the menu leaves blank; those numbers are labeled as web estimates and never counted in totals.
+
+Step-by-step setup: [docs/hosting.md](docs/hosting.md). All settings: [.streamlit/secrets.toml.example](.streamlit/secrets.toml.example).
+
+In the terminal, `DINEWOLFIE_ENGINE=groq` with `GROQ_API_KEY` in `.env` runs the CLI and the morning run on Groq.
+
 ## Data
 
 Menu data comes from Stony Brook University's Nutrislice menus (`stonybrook.api.nutrislice.com`). We have asked SBU Campus Dining for permission to fetch them automatically and have not heard back yet, so **live fetching is off by default** (`DINEWOLFIE_LIVE_FETCH=off`): DineWolfie never contacts Nutrislice and runs on saved menus. If permission is granted and it is switched on, DineWolfie is polite about it: one request covers a whole week for one station, results are cached on disk, a station is fetched at most once a day, requests are spaced out and identify the project, and if the server refuses or rate-limits any request, all fetching stops at once instead of retrying. Nutrition values are Nutrislice's per-serving numbers. When an item has none, DineWolfie says "nutrition not listed" instead of guessing.

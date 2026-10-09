@@ -7,14 +7,15 @@ from __future__ import annotations
 
 import html
 import json
+import os
 from datetime import date, timedelta
 
 import streamlit as st
 
 import config
-from src import notify
+from src import access, notify, storage
 from src import tools as T
-from src.agent import default_goal, run_agent
+from src.agent import Engine, default_goal, run_agent
 
 st.set_page_config(page_title="DineWolfie", page_icon="🐺", layout="wide")
 
@@ -142,9 +143,76 @@ TOOL_LABELS = {
 MEAL_LABEL = {"breakfast": "Breakfast", "brunch": "Brunch", "lunch": "Lunch", "dinner": "Dinner",
               "late_night": "Late night"}
 
-for key, default in {"events": [], "plan": None, "reply": "", "session_id": None, "error": None,
-                     "stats": None, "goal": ""}.items():
+for key, default in {"events": [], "plan": None, "reply": "", "resume": None, "resume_engine": None,
+                     "error": None, "stats": None, "goal": ""}.items():
     st.session_state.setdefault(key, default)
+
+
+# ---------------------------------------------------------------------------------------
+# Hosting, sign-in and where this visitor's memory lives
+# ---------------------------------------------------------------------------------------
+def secret(name: str, default=None):
+    """Read Streamlit secrets without crashing when there is no secrets file (local runs)."""
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+
+# Model choices can also come from secrets on the hosted site.
+config.MODEL = secret("DINEWOLFIE_MODEL") or config.MODEL
+config.GROQ_MODEL = secret("DINEWOLFIE_GROQ_MODEL") or config.GROQ_MODEL
+
+# Streamlit Community Cloud runs apps from /mount/src/<repo>; `hosted = true` in secrets also works.
+HOSTED = bool(secret("hosted", False)) or str(config.ROOT).replace("\\", "/").startswith("/mount/src")
+AUTH_ENABLED = bool(secret("auth"))
+SIGNED_IN = bool(AUTH_ENABLED and st.user.is_logged_in)
+USER_EMAIL = (st.user.get("email") or "").lower() if SIGNED_IN else ""
+USER_NAME = (st.user.get("name") or "") if SIGNED_IN else ""
+
+
+@st.cache_resource(show_spinner=False)
+def users_worksheet():
+    info, sheet = secret("gcp_service_account"), secret("gsheets")
+    if not info or not sheet or not sheet.get("sheet_id"):
+        return None
+    return storage.open_worksheet(dict(info), sheet["sheet_id"], sheet.get("tab", "users"))
+
+
+def example_prefs() -> dict:
+    path = config.ROOT / "prefs.example.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def choose_store():
+    """Signed in + Google Sheet -> your row in the sheet. Hosted guest -> this tab only. Local -> prefs.json."""
+    if SIGNED_IN:
+        key = f"sheet:{USER_EMAIL}"
+        if st.session_state.get("store_key") != key:
+            try:
+                ws = users_worksheet()
+                st.session_state.store = (storage.SheetStore(ws, USER_EMAIL, USER_NAME) if ws is not None
+                                          else storage.MemoryStore(example_prefs()))
+            except Exception as exc:  # sheet misconfigured: keep working, just don't save
+                st.session_state.store = storage.MemoryStore(example_prefs())
+                st.session_state.store_error = f"Couldn't open the Google Sheet ({exc}); memory won't be saved."
+            st.session_state.store_key = key
+        return st.session_state.store
+    if HOSTED:
+        if st.session_state.get("store_key") != "guest":
+            st.session_state.store = storage.MemoryStore(example_prefs())
+            st.session_state.store_key = "guest"
+        return st.session_state.store
+    return None  # running locally: prefs.json + history.json
+
+
+STORE = choose_store()
+storage.use(STORE)
+MEMORY_WHERE = {
+    None: "Saved in prefs.json on this computer.",
+    "session": "Saved for this browser tab only (sign in to keep it).",
+    "sheet": "Saved to your account.",
+}[STORE.kind if STORE is not None and STORE.kind != "file" else None]
 
 e = html.escape
 
@@ -302,9 +370,52 @@ def tray_html(plan: dict) -> str:
 # Sidebar: memory, data source, demo switches
 # ---------------------------------------------------------------------------------------
 with st.sidebar:
+    if AUTH_ENABLED:
+        if SIGNED_IN:
+            st.markdown(f"Signed in as **{e(USER_NAME or USER_EMAIL)}**")
+            st.button("Sign out", on_click=st.logout)
+        else:
+            st.button("Sign in with Google", on_click=st.login, type="primary", width="stretch")
+            st.caption("Guest mode: your memory lasts until you close this tab.")
+    elif HOSTED:
+        st.caption("Guest mode: your memory lasts until you close this tab.")
+    if st.session_state.get("store_error"):
+        st.warning(st.session_state.store_error)
+
+    # --- AI engine -----------------------------------------------------------------------
+    st.markdown("### AI engine")
+    provider = st.radio("Engine", ["Claude", "Groq"], horizontal=True, key="provider",
+                        help="Claude runs through the Claude Agent SDK. Groq runs an open model "
+                             f"({config.GROQ_MODEL}) through the same tools and checker.").lower()
+    key_policy = dict(hosted=HOSTED, auth_enabled=AUTH_ENABLED, signed_in=SIGNED_IN, email=USER_EMAIL,
+                      allowed_emails=list(secret("allowed_emails", []) or []),
+                      open_to_all=bool(secret("share_keys_with_everyone", False)))
+    env_name = "ANTHROPIC_API_KEY" if provider == "claude" else "GROQ_API_KEY"
+    pasted = st.text_input(f"Your {'Anthropic' if provider == 'claude' else 'Groq'} API key (optional)",
+                           type="password", key=f"key_{provider}",
+                           help="Used only in this browser tab; never saved.")
+    app_key = secret(env_name) or (os.getenv(env_name) if not HOSTED and provider == "groq" else None)
+    api_key, why = access.choose_key(pasted, app_key, **key_policy)
+    if provider == "claude" and api_key is None and not HOSTED:
+        st.caption("Using this computer's Claude plan login.")
+        ENGINE_READY = True
+    else:
+        st.caption(access.explain(why, provider))
+        ENGINE_READY = api_key is not None
+    ENGINE = Engine(provider, api_key, config.GROQ_MODEL if provider == "groq" else None)
+
+    with st.expander("Web nutrition lookup (Tavily)"):
+        st.caption("For items the menu lists without nutrition. Results are labeled as web estimates and "
+                   "never added to your totals.")
+        tav_pasted = st.text_input("Your Tavily API key (optional)", type="password", key="key_tavily")
+        tav_app = secret("TAVILY_API_KEY") or (os.getenv("TAVILY_API_KEY") if not HOSTED else None)
+        tav_key, tav_why = access.choose_key(tav_pasted, tav_app, **key_policy)
+        st.caption("On." if tav_key else "Off (no key).")
+    T.configure(tavily_key=tav_key)
+
     st.markdown("### Your memory")
-    st.caption("Saved in prefs.json. The agent reads it before every plan, and updates it when you "
-               "tell it something lasting, like a new allergy.")
+    st.caption(MEMORY_WHERE + " The agent reads it before every plan, and updates it when you tell it "
+               "something lasting, like a new allergy.")
     prefs = T.read_prefs()
     with st.form("prefs"):
         name = st.text_input("Name", prefs.get("name") or "")
@@ -350,15 +461,13 @@ with st.sidebar:
         st.caption("Notes the agent saved: " + "; ".join(map(str, prefs["notes"])))
 
     st.markdown("### Menu data")
-    mode = st.radio("Source", ["live", "sample"], index=0 if config.DATA_MODE == "live" else 1,
+    mode = st.radio("Source", ["live", "sample"], index=0 if config.DATA_MODE == "live" else 1, key="data_mode",
                     horizontal=True, help="sample: saved real menus, works offline. live: today's menus from the "
                                           "cache on this computer; Nutrislice is only contacted if "
                                           "DINEWOLFIE_LIVE_FETCH=on (off until SBU Dining gives permission).")
     if not config.LIVE_FETCH:
         st.caption("Live fetching from Nutrislice is off. Only menus saved on this computer are used.")
-    if mode != config.DATA_MODE:
-        config.DATA_MODE = mode
-        T.clear_cache()
+    T.configure(data_mode=mode)  # per visitor, so one person's choice never changes anyone else's
 
     with st.expander("Demo: break things on purpose"):
         st.caption("Shows how the agent copes when things go wrong. The agent isn't told these are "
@@ -402,9 +511,9 @@ def use_example() -> None:
         st.session_state.goal_box = EXAMPLES[st.session_state.example]
 
 
-def start_run(goal: str, plan_date: date, resume: str | None, rail_slot, tray_slot) -> None:
+def start_run(goal: str, plan_date: date, resume, rail_slot, tray_slot) -> None:
     if not resume:
-        st.session_state.update(events=[], plan=None, reply="", session_id=None, error=None, stats=None)
+        st.session_state.update(events=[], plan=None, reply="", resume=None, error=None, stats=None)
     events = st.session_state.events
 
     def on_event(ev: dict) -> None:
@@ -413,9 +522,10 @@ def start_run(goal: str, plan_date: date, resume: str | None, rail_slot, tray_sl
         if ev["type"] == "final_plan":
             tray_slot.markdown(tray_html(ev["plan"]), unsafe_allow_html=True)
 
-    run = run_agent(goal, plan_date=plan_date, on_event=on_event, resume=resume)
+    run = run_agent(goal, plan_date=plan_date, on_event=on_event, resume=resume, engine=ENGINE)
     st.session_state.update(plan=run.plan or st.session_state.plan, reply=run.reply,
-                            session_id=run.session_id or st.session_state.session_id, error=run.error,
+                            resume=run.session_id or run.messages or st.session_state.resume,
+                            resume_engine=ENGINE.provider, error=run.error,
                             stats={"seconds": run.duration_s, "tools": run.tool_calls,
                                    "adaptations": run.adaptations, "turns": run.num_turns})
     st.rerun()
@@ -467,16 +577,25 @@ with tab_plan:
             m3.metric("Seconds", s["seconds"])
         if st.session_state.plan:
             c1, c2 = st.columns([1, 2])
+            # Hosted: each visitor uses their own ntfy topic (the app's topic is the owner's phone).
+            topic = (st.session_state.get("ntfy_topic") or "").strip() if HOSTED else None
             if c1.button("Send to my phone", width="stretch"):
-                try:
-                    notify.send_plan(st.session_state.plan)
-                    st.toast("Sent to your phone")
-                except Exception as exc:
-                    st.error(f"Couldn't send: {exc}")
+                if HOSTED and not topic:
+                    st.info("Add your ntfy topic below first (install the ntfy app and subscribe to a long, "
+                            "random topic name).")
+                else:
+                    try:
+                        notify.send_plan(st.session_state.plan, topic=topic)
+                        st.toast("Sent to your phone")
+                    except Exception as exc:
+                        st.error(f"Couldn't send: {exc}")
             with c2.popover("Preview the notification", width="stretch"):
                 title, body = notify.plan_message(st.session_state.plan)
                 st.markdown(f"**{title}**")
                 st.text(body)
+            if HOSTED:
+                st.text_input("Your ntfy topic", key="ntfy_topic", type="password",
+                              help="Kept only in this tab. Subscribe to the same topic in the ntfy phone app.")
             with st.expander("Teach DineWolfie: love it or never again"):
                 st.caption("Saved to memory. Favorites get picked first; never-again items are blocked for good.")
                 seen = set()
@@ -493,7 +612,7 @@ with tab_plan:
                         if n3.button("Never again", key=f"ban-{item['id']}", width="stretch"):
                             remember("never_eat", item["name"])
                             st.toast(f"{item['name']} is blocked from now on")
-            if st.session_state.session_id:
+            if st.session_state.resume and st.session_state.resume_engine == ENGINE.provider:
                 with st.form("followup", clear_on_submit=True):
                     follow = st.text_input("Change something", placeholder="e.g. swap dinner to East, "
                                                                           "or I don't eat eggs")
@@ -502,10 +621,13 @@ with tab_plan:
                         st.rerun()
 
     if go and st.session_state.goal_box.strip():
-        start_run(st.session_state.goal_box.strip(), plan_date, None, rail_slot, tray_slot)
+        if ENGINE_READY:
+            start_run(st.session_state.goal_box.strip(), plan_date, None, rail_slot, tray_slot)
+        else:
+            st.warning(access.explain(why, ENGINE.provider) + " (sidebar > AI engine)")
     if st.session_state.get("pending_followup"):
         follow = st.session_state.pop("pending_followup")
-        start_run(follow, plan_date, st.session_state.session_id, rail_slot, tray_slot)
+        start_run(follow, plan_date, st.session_state.resume, rail_slot, tray_slot)
 
 
 # ---------------------------------------------------------------------------------------

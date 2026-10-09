@@ -5,6 +5,7 @@ import json
 import pytest
 
 import config
+from src import storage
 from src import tools as T
 
 SAMPLE_DATE = "2026-10-01"
@@ -17,8 +18,12 @@ def offline_sample(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HISTORY_FILE", tmp_path / "history.json")
     T.clear_cache()
     T.set_simulation()
+    T.configure(tavily_key=None, data_mode=None)
+    storage.use(None)
     yield
     T.set_simulation()
+    T.configure(tavily_key=None, data_mode=None)
+    storage.use(None)
     T.clear_cache()
 
 

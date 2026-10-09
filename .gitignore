@@ -28,3 +28,6 @@ Thumbs.db
 docs/devpost.md
 docs/devpost-submission.md
 docs/demo-script.md
+
+# Streamlit secrets: API keys, Google credentials (never commit)
+.streamlit/secrets.toml
