@@ -483,14 +483,36 @@ def compare_halls(meal: str, date: str | None = None, min_protein_g: float | Non
             "best_protein_items": [f"{i['name']} ({i['protein_g']} g protein, {i['calories']} kcal)" for i in top],
             "protein_from_top_3_g": sum(i["protein_g"] or 0 for i in top),
         }
-    ranked = sorted(HALLS, key=lambda h: (report[h]["menu_status"] == "ok", report[h]["protein_from_top_3_g"],
-                                          report[h]["matching_items"]), reverse=True)
-    best = ranked[0] if report[ranked[0]]["menu_status"] == "ok" else None
+    posted = [h for h in HALLS if report[h]["menu_status"] == "ok"]
+    if not posted:
+        return {"status": "no_menu_posted", "meal": meal, "date": day.isoformat(), "halls": report,
+                "better_hall_by_protein": None,
+                "summary": f"For {meal} {day.isoformat()}: neither hall has a menu posted."}
+    if not any(report[h]["matching_items"] for h in posted):
+        # Nothing passes the filters: say what the best item actually is, so the agent can adapt
+        # (combine items, use extra servings, or relax the filter) instead of picking a hall at random.
+        best_any = []
+        for h in posted:
+            top = search_items(meal, hall=h, date=day.isoformat(), sort_by="protein", limit=1)["items"]
+            if top:
+                best_any.append((top[0]["protein_g"] or 0, h, top[0]["name"]))
+        best_any.sort(reverse=True)
+        hint = (f" The highest-protein single item is {best_any[0][2]} at {best_any[0][1]} "
+                f"({best_any[0][0]} g per serving)." if best_any else "")
+        limits = " and ".join(x for x in [f"at least {min_protein_g:g} g protein" if min_protein_g else "",
+                                          f"at most {max_calories:g} kcal" if max_calories else ""] if x)
+        return {"status": "no_matches", "meal": meal, "date": day.isoformat(), "halls": report,
+                "better_hall_by_protein": None,
+                "summary": f"No {meal} item at either hall has {limits or 'a match'} in one serving.{hint} "
+                           "Combine several items or servings, or relax the filter."}
+    ranked = sorted(posted, key=lambda h: (report[h]["protein_from_top_3_g"], report[h]["matching_items"]),
+                    reverse=True)
+    best = ranked[0]
     summary = (f"For {meal} {day.isoformat()}: " + "; ".join(
         f"{h} {report[h]['matching_items']} matches, top-3 protein {report[h]['protein_from_top_3_g']} g"
         if report[h]["menu_status"] == "ok" else f"{h} {report[h]['menu_status']}" for h in HALLS)
-        + (f". Edge: {best}." if best else ". Neither hall has a menu posted."))
-    return {"status": "ok" if best else "no_menu_posted", "meal": meal, "date": day.isoformat(),
+        + f". Edge: {best}.")
+    return {"status": "ok", "meal": meal, "date": day.isoformat(),
             "halls": report, "better_hall_by_protein": best, "summary": summary}
 
 

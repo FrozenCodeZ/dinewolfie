@@ -236,3 +236,73 @@ def test_hosted_guest_gets_private_memory_and_no_shared_key(monkeypatch):
     plan_button = next(b for b in at.button if b.label == "Plan my day")
     plan_button.click().run()
     assert any("Sign in with Google" in w.value for w in at.warning)
+
+
+# --- Groq lean mode + the "nothing matches" case ------------------------------------------------
+
+def test_compare_halls_with_no_matches_explains_instead_of_picking_a_hall(prefs):
+    prefs(diet=["vegetarian"])
+    res = T.compare_halls("breakfast", SAMPLE_DATE, min_protein_g=40)
+    assert res["status"] == "no_matches" and res["better_hall_by_protein"] is None
+    assert "highest-protein single item" in res["summary"] and "Combine" in res["summary"]
+
+
+def test_lean_results_are_much_smaller_but_keep_ids(prefs):
+    from src.groq_agent import lean_result
+    prefs()
+    full = T.search_items("dinner", date=SAMPLE_DATE, limit=8)
+    lean = lean_result("search_items", full)
+    assert len(json.dumps(lean)) < len(json.dumps(full)) / 2
+    assert [i["id"] for i in lean["items"]] == [i["id"] for i in full["items"]]
+
+
+def test_old_results_shrink_to_ids_and_summary():
+    from src.groq_agent import shrink_history
+    big = json.dumps({"status": "ok", "summary": "8 items", "items": [
+        {"id": "W1", "name": "Tofu", "protein_g": 10, "kcal": 100, "station": "Rooted"}] * 8,
+        "excluded_counts": {"diet": 40}})
+    msgs = [{"role": "tool", "tool_call_id": str(i), "content": big} for i in range(4)]
+    shrink_history(msgs, keep=2)
+    assert "W1 Tofu (10 g)" in msgs[0]["content"] and "excluded_counts" not in msgs[0]["content"]
+    assert msgs[3]["content"] == big  # the latest results stay complete
+
+
+def test_groq_waits_visibly_when_rate_limited(prefs):
+    from src.agent import AgentRun, Engine, _current
+    from src.groq_agent import run_groq
+
+    prefs()
+
+    class RateLimited(Exception):
+        status_code = 429
+        response = SimpleNamespace(headers={"retry-after": "7"})
+
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RateLimited("rate limit")
+        return {"content": "ok"}
+
+    fake = FakeGroq([flaky, flaky, flaky])
+    original = fake.create
+
+    def create(**kw):
+        step = fake.script[0]
+        if callable(step) and calls["n"] == 0:
+            fake.script.pop(0)
+            step()  # raises the 429 once
+        return original(**kw)
+
+    fake.chat.completions.create = create
+    slept, events = [], []
+    run = AgentRun(goal="x", engine="groq")
+    token = _current.set({"run": run, "on_event": events.append})
+    try:
+        run_groq(run, "x", T.resolve_date(SAMPLE_DATE), None, Engine("groq", "gsk-test"), client=fake,
+                 sleep=slept.append)
+    finally:
+        _current.reset(token)
+    assert slept == [7.0]
+    assert any(e["type"] == "wait" and "7 s" in e["text"] for e in events)

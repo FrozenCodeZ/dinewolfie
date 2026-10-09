@@ -55,6 +55,8 @@ def print_event(event: dict) -> None:
     elif kind == "adaptation":
         print(f"{YELLOW}{BOLD}🔄 ADAPT:{RESET}{YELLOW} {event['problem']} -> {event['change']}"
               f"{(' (' + event['reason'] + ')') if event['reason'] else ''}{RESET}")
+    elif kind == "wait":
+        print(f"{DIM}⏳ {event['text']}{RESET}")
     elif kind == "warning":
         print(f"{YELLOW}⚠️  {event['text']}{RESET}")
     elif kind == "error":

@@ -276,6 +276,8 @@ def rail_html(events: list[dict], live: bool) -> str:
             tickets.append(f'<div class="tk tk-adapt"><div class="tk-head"><span class="tk-name">Changed course'
                            f'</span><span class="tk-time">{dt}</span></div><div class="tk-out"><b>'
                            f'{e(ev["problem"])}</b><br>{e(ev["change"])}</div>{why}</div>')
+        elif kind == "wait":
+            tickets.append(f'<div class="tk tk-think">⏳ {e(ev["text"])}</div>')
         elif kind in ("warning", "error"):
             tickets.append(f'<div class="tk tk-error"><div class="tk-out">{e(ev["text"])}</div></div>')
         elif kind == "done":
