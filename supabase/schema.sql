@@ -39,3 +39,17 @@ create policy "change own memory" on public.dinewolfie_memory
 -- Start from nothing, then grant only what the app uses (no delete, no truncate).
 revoke all on public.dinewolfie_memory from anon, authenticated;
 grant select, insert, update on public.dinewolfie_memory to authenticated;
+
+-- Keep-alive: free Supabase projects pause after about a week without database activity.
+-- The scheduled GitHub job .github/workflows/supabase-keepalive.yml calls this every 3 days.
+-- It reads no data: it only returns the current time.
+create or replace function public.dinewolfie_ping()
+returns timestamptz
+language sql
+stable
+security invoker
+set search_path = ''
+as $$ select now() $$;
+
+revoke all on function public.dinewolfie_ping() from public;
+grant execute on function public.dinewolfie_ping() to anon, authenticated;

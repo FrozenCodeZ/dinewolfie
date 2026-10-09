@@ -30,7 +30,7 @@ def choose_key(visitor_key: str | None, app_key: str | None, *, hosted: bool, au
 
 
 def explain(source: str, provider: str) -> str:
-    name = "Anthropic" if provider == "claude" else "Groq"
+    name = {"claude": "Anthropic", "groq": "Groq", "gemini": "Gemini", "cerebras": "Cerebras"}.get(provider, provider)
     return {
         YOURS: f"Using the {name} key you pasted (kept only in this browser tab).",
         APP: f"Using the app's {name} key.",

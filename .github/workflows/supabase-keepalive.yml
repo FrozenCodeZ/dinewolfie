@@ -1,0 +1,33 @@
+# Free Supabase projects pause after about a week with no database activity, which would break
+# sign-in (for example while judges look at the project). This pings the database every 3 days.
+#
+# Setup (once): GitHub repo -> Settings -> Secrets and variables -> Actions -> New repository secret:
+#   SUPABASE_URL  = https://YOUR-PROJECT.supabase.co
+#   SUPABASE_KEY  = the publishable key (sb_publishable_...), the same one the app uses
+# Until both exist, the job skips itself. Run it by hand from the Actions tab to test it.
+name: Keep Supabase awake
+
+on:
+  schedule:
+    - cron: "23 14 */3 * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping the database
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
+            echo "SUPABASE_URL / SUPABASE_KEY secrets aren't set yet; nothing to do."
+            exit 0
+          fi
+          curl --fail-with-body -sS -X POST "${SUPABASE_URL%/}/rest/v1/rpc/dinewolfie_ping" \
+            -H "apikey: $SUPABASE_KEY" -H "Content-Type: application/json" -d '{}'
+          echo

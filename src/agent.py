@@ -164,7 +164,8 @@ class AIBusy(Exception):
 class Engine:
     """Which AI runs the agent loop.
 
-    provider: "claude" (Claude Agent SDK), "groq", or "builtin" (no AI: src/planner.py).
+    provider: "claude" (Claude Agent SDK); "groq", "gemini" or "cerebras" (src/groq_agent.py);
+              or "builtin" (no AI: src/planner.py).
     api_key:  for Claude, None means "use this computer's Claude plan login";
               for Groq a key is required.
     """
@@ -181,8 +182,9 @@ class Engine:
     def label(self) -> str:
         if self.provider == "builtin":
             return "Built-in planner (no AI)"
-        if self.provider == "groq":
-            return f"Groq ({self.model or config.GROQ_MODEL}, {self.mode})"
+        if self.provider in ("groq", "gemini", "cerebras"):
+            from src.groq_agent import PROVIDERS, model_settings
+            return f"{PROVIDERS[self.provider].label} ({self.model or model_settings(self.provider)[0]}, {self.mode})"
         return (f"Claude ({self.model or config.MODEL}, {self.mode}"
                 f"{', API key' if self.api_key else ', Claude plan'})")
 
@@ -490,7 +492,7 @@ async def run_agent_async(goal: str, plan_date: date | None = None,
         if engine.provider == "builtin":
             from src.planner import run_builtin
             run_builtin(run, goal, plan_date)
-        elif engine.provider == "groq":
+        elif engine.provider in ("groq", "gemini", "cerebras"):
             from src.groq_agent import run_groq  # only imported when used
             run_groq(run, goal, plan_date, resume if isinstance(resume, list) else None, engine)
         else:
@@ -551,8 +553,9 @@ def engine_from_env() -> Engine:
     which = os.getenv("DINEWOLFIE_ENGINE", "claude").strip().lower()
     if which == "builtin":
         return Engine("builtin", None, None, config.MODE)
-    if which == "groq":
-        return Engine("groq", os.getenv("GROQ_API_KEY"), config.GROQ_MODEL, config.MODE)
+    if which in ("groq", "gemini", "cerebras"):
+        from src.groq_agent import PROVIDERS, model_settings
+        return Engine(which, os.getenv(PROVIDERS[which].env_key), model_settings(which)[0], config.MODE)
     return Engine("claude", None, None, config.MODE)  # the SDK picks up ANTHROPIC_API_KEY itself if set
 
 

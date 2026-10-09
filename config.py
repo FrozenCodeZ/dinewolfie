@@ -134,7 +134,16 @@ GROQ_FALLBACK_MODELS = [m.strip() for m in os.getenv(
 # If every AI option is rate-limited, make the plan with the built-in planner (no AI) instead of
 # making the student wait. The plan is labeled so it's clear the AI didn't make it.
 FALLBACK_TO_BUILTIN = os.getenv("DINEWOLFIE_FALLBACK_BUILTIN", "on").strip().lower() in ("on", "1", "true", "yes")
-# How long gpt-oss models think before answering: low | medium | high. Lower = faster, fewer tokens.
+# Gemini and Cerebras (both optional, OpenAI-compatible). "auto" asks the service for its model list
+# and picks the newest suitable one, so renamed models keep working. The lists are used when the
+# service can't be asked, and as fallbacks; models it doesn't have are skipped.
+GEMINI_MODEL = os.getenv("DINEWOLFIE_GEMINI_MODEL", "auto").strip() or "auto"
+GEMINI_MODELS = [m.strip() for m in os.getenv(
+    "DINEWOLFIE_GEMINI_FALLBACKS", "gemini-3.8-flash,gemini-2.5-flash,gemini-2.5-flash-lite").split(",") if m.strip()]
+CEREBRAS_MODEL = os.getenv("DINEWOLFIE_CEREBRAS_MODEL", "auto").strip() or "auto"
+CEREBRAS_MODELS = [m.strip() for m in os.getenv("DINEWOLFIE_CEREBRAS_FALLBACKS", "gpt-oss-120b").split(",")
+                   if m.strip()]
+# How long thinking models (gpt-oss, Gemini) think before answering: low | medium | high.
 GROQ_REASONING_EFFORT = os.getenv("DINEWOLFIE_GROQ_REASONING", "low").strip().lower() or "low"
 
 # --- Notifications -------------------------------------------------------------

@@ -1,6 +1,8 @@
-"""Second engine: the same tools, prompt and plan checker, with a Groq-hosted model.
+"""The other AI engines: Groq, Gemini and Cerebras, with the same tools, prompt and plan checker.
 
-The Claude Agent SDK runs its own loop. Groq doesn't have one, so this file is the loop:
+All three speak the same "OpenAI-compatible" chat API, so one loop serves them; PROVIDERS below
+holds what differs (address, key, model names, a parameter name). The Claude Agent SDK runs its
+own loop; these services don't have one, so this file is the loop:
 
     send messages + tool list -> model asks for tools -> run them -> send results back
     -> repeat until the model stops asking for tools.
@@ -20,12 +22,88 @@ and the loop ends the moment the checker accepts the plan.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
+from dataclasses import dataclass
 from datetime import date
 
 import config
 from src import agent as A
+
+
+@dataclass(frozen=True)
+class Provider:
+    key: str            # groq | gemini | cerebras
+    label: str
+    env_key: str        # where the app owner's key lives (secrets / .env)
+    base_url: str | None
+    token_param: str    # name of the "longest reply" setting this service accepts
+    key_url: str        # where to get a key
+    per_hall: int       # briefing candidates per place (smaller = fewer tokens)
+
+
+PROVIDERS = {
+    "groq": Provider("groq", "Groq", "GROQ_API_KEY", None, "max_completion_tokens",
+                     "https://console.groq.com/keys", 7),
+    "gemini": Provider("gemini", "Gemini", "GEMINI_API_KEY",
+                       "https://generativelanguage.googleapis.com/v1beta/openai/", "max_tokens",
+                       "https://aistudio.google.com/apikey", 10),
+    "cerebras": Provider("cerebras", "Cerebras", "CEREBRAS_API_KEY", "https://api.cerebras.ai/v1",
+                         "max_completion_tokens", "https://cloud.cerebras.ai", 10),
+}
+AUTO = "auto"  # "ask the service which models it has and pick the best one"
+
+
+def model_settings(provider: str) -> tuple[str, list[str]]:
+    """(chosen model or "auto", fallbacks), read from config at call time (the app can override it)."""
+    if provider == "gemini":
+        return config.GEMINI_MODEL, list(config.GEMINI_MODELS)
+    if provider == "cerebras":
+        return config.CEREBRAS_MODEL, list(config.CEREBRAS_MODELS)
+    return config.GROQ_MODEL, list(config.GROQ_FALLBACK_MODELS)
+
+
+def make_client(provider: str, api_key: str):
+    if provider == "groq":
+        from groq import Groq
+        return Groq(api_key=api_key, max_retries=0, timeout=90)  # we handle waits ourselves
+    from openai import OpenAI
+    return OpenAI(api_key=api_key, base_url=PROVIDERS[provider].base_url, max_retries=0, timeout=90)
+
+
+_SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "vision", "guard", "whisper", "native")
+
+
+def rank_models(provider: str, ids: list[str]) -> list[str]:
+    """Chat models worth trying, best first. Gemini: newest stable Flash first, then Flash-Lite."""
+    ids = [i.removeprefix("models/") for i in ids if not any(w in i.lower() for w in _SKIP_WORDS)]
+    if provider == "gemini":
+        flash = [i for i in ids if i.startswith("gemini-") and "flash" in i]
+        stable = [i for i in flash if "preview" not in i and "exp" not in i] or flash
+
+        def version(model_id):
+            match = re.match(r"gemini-(\d+(?:\.\d+)?)", model_id)
+            return float(match.group(1)) if match else 0.0
+        return sorted(stable, key=lambda i: (-version(i), "lite" in i, len(i)))
+    preferred = [m for m in ("gpt-oss-120b", "openai/gpt-oss-120b") if m in ids]
+    return preferred + sorted(i for i in ids if i not in preferred)
+
+
+_discovered: dict[str, tuple[float, list[str]]] = {}
+
+
+def discover(provider: str, client) -> list[str]:
+    """The service's own model list (cached for an hour), so new or renamed models just work."""
+    hit = _discovered.get(provider)
+    if hit and time.monotonic() - hit[0] < 3600:
+        return hit[1]
+    try:
+        ranked = rank_models(provider, [m.id for m in client.models.list()])
+    except Exception:
+        ranked = []
+    _discovered[provider] = (time.monotonic(), ranked)
+    return ranked
 
 GROQ_NOTE = ("\n\nYou run with tight token limits: use search_items (limit 8) and compare_halls, call one tool "
              "at a time, and keep notes short.")
@@ -37,40 +115,48 @@ MAX_BAD_TOOL_RETRIES = 2
 MAX_RATE_WAITS = 6
 MAX_WAIT_S = 60
 MAX_COMPLETION_TOKENS = 2048  # a whole fast-mode plan is ~1,000; a smaller cap may also count less against the limit
-FAST_PER_HALL = 7             # candidates per place in Groq's briefing (Claude gets 10)
 SHORT_WAIT_S = 8              # wait this long at most for a model to free up before giving up on the AI
 WAIT_BUDGET_S = 20            # total waiting per plan before falling back to the built-in planner
 
-# Groq's limits are per organization *and per model*, and shared by every visitor using the same
+# Free-tier limits are per account *and per model*, and shared by every visitor using the same
 # key. So when a model is at its limit we note until when, and every visitor skips it until then.
-_cooldown: dict[str, float] = {}   # model -> time.monotonic() when it may be tried again
-_unavailable: set[str] = set()     # models Groq says don't exist (renamed or retired)
+# Keys are "provider:model".
+_cooldown: dict[str, float] = {}   # -> time.monotonic() when it may be tried again
+_unavailable: set[str] = set()     # models the service says don't exist (renamed or retired)
+_no_reasoning: set[str] = set()    # models that refused the reasoning_effort setting
 _models_lock = threading.Lock()
 
 
-def model_chain(primary: str) -> list[str]:
-    """The chosen model first, then the fallbacks, minus models Groq doesn't have."""
-    chain = [primary] + [m for m in config.GROQ_FALLBACK_MODELS if m != primary]
+def model_chain(primary: str, provider: str = "groq", discovered: list[str] | None = None) -> list[str]:
+    """The chosen model first (or the service's best when "auto"), then fallbacks, minus missing ones."""
+    _, fallbacks = model_settings(provider)
+    if primary == AUTO:
+        chain = list(discovered or []) or fallbacks
+    else:
+        chain = [primary] + [m for m in fallbacks if m != primary]
     with _models_lock:
-        return [m for m in chain if m not in _unavailable]
+        return [m for m in dict.fromkeys(chain) if f"{provider}:{m}" not in _unavailable]
 
 
-def next_model(primary: str, now: float) -> tuple[str | None, float]:
+def next_model(primary: str, now: float, provider: str = "groq",
+               discovered: list[str] | None = None) -> tuple[str | None, float]:
     """(first model that isn't cooling down, or None; seconds until the soonest one frees up)."""
-    chain = model_chain(primary)
+    chain = model_chain(primary, provider, discovered)
     if not chain:
-        raise RuntimeError("None of the Groq models DineWolfie knows are available any more. Pick another "
-                           "model, or set DINEWOLFIE_GROQ_FALLBACKS to current ones from console.groq.com.")
+        raise RuntimeError(f"None of the {PROVIDERS[provider].label} models DineWolfie tried are available. "
+                           "Pick another model in the sidebar.")
     with _models_lock:
         for m in chain:
-            if _cooldown.get(m, 0) <= now:
+            if _cooldown.get(f"{provider}:{m}", 0) <= now:
                 return m, 0.0
-        return None, max(0.0, min((_cooldown.get(m, now) for m in chain), default=now) - now)
+        soonest = min(_cooldown.get(f"{provider}:{m}", now) for m in chain)
+        return None, max(0.0, soonest - now)
 
 
-def _cool(model: str, seconds: float) -> None:
+def _cool(model: str, seconds: float, provider: str = "groq") -> None:
     with _models_lock:
-        _cooldown[model] = max(_cooldown.get(model, 0), time.monotonic() + seconds)
+        key = f"{provider}:{model}"
+        _cooldown[key] = max(_cooldown.get(key, 0), time.monotonic() + seconds)
 
 
 def _missing_model(exc) -> bool:
@@ -99,10 +185,13 @@ def tool_schemas(fast: bool = False) -> list[dict]:
             for name, desc, schema, _fn, _ro in lean_specs(fast)]
 
 
-def model_options(model: str) -> dict:
-    """gpt-oss models can be told to think briefly, which saves time and tokens."""
-    if model.startswith("openai/gpt-oss") and config.GROQ_REASONING_EFFORT in ("low", "medium", "high"):
-        return {"reasoning_effort": config.GROQ_REASONING_EFFORT}
+def model_options(model: str, provider: str = "groq") -> dict:
+    """Thinking models (gpt-oss, Gemini) can be told to think briefly: faster, fewer tokens."""
+    effort = config.GROQ_REASONING_EFFORT
+    if effort not in ("low", "medium", "high") or f"{provider}:{model}" in _no_reasoning:
+        return {}
+    if "gpt-oss" in model or (provider == "gemini" and model.startswith("gemini-")):
+        return {"reasoning_effort": effort}
     return {}
 
 
@@ -187,7 +276,7 @@ def _execute(name: str, raw_args: str | None, allowed: set[str]) -> dict:
 
 
 def _retry_after(exc) -> float | None:
-    """Seconds to wait if Groq rate-limited us (429) or the request was over the minute budget (413)."""
+    """Seconds to wait if we were rate-limited (429) or the request was over the minute budget (413)."""
     status = getattr(exc, "status_code", None)
     if status not in (413, 429):
         return None
@@ -204,15 +293,18 @@ def _wire(messages: list[dict]) -> list[dict]:
 
 
 def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine, client=None,
-             sleep=time.sleep) -> None:
-    """Fill in `run` (plan, reply, messages) by driving a Groq model through our tools."""
+             sleep=None) -> None:
+    """Fill in `run` (plan, reply, messages) by driving a Groq, Gemini or Cerebras model through our tools."""
+    sleep = sleep or time.sleep
+    provider = engine.provider if engine.provider in PROVIDERS else "groq"
+    info = PROVIDERS[provider]
     if not engine.api_key:
-        raise RuntimeError("Groq needs an API key. Paste one in the sidebar, or add GROQ_API_KEY to the "
-                           "app's secrets.")
+        raise RuntimeError(f"{info.label} needs an API key. Paste one in the sidebar, or add {info.env_key} to "
+                           "the app's secrets.")
     if client is None:
-        from groq import Groq
-        client = Groq(api_key=engine.api_key, max_retries=0, timeout=90)  # we handle waits ourselves
-    primary = engine.model or config.GROQ_MODEL
+        client = make_client(provider, engine.api_key)
+    primary = engine.model or model_settings(provider)[0]
+    discovered = discover(provider, client) if primary == AUTO else None
     fast = engine.fast
     allowed = {spec[0] for spec in lean_specs(fast)}
     tools = tool_schemas(fast)
@@ -223,7 +315,7 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
         first = f"Plan date: {plan_date.isoformat()}.\nMy goal: {goal}"
         if fast:
             from src.briefing import gather
-            first += "\n\n" + gather(plan_date, goal, per_hall=FAST_PER_HALL)
+            first += "\n\n" + gather(plan_date, goal, per_hall=info.per_hall)
         messages = [{"role": "system", "content": A.system_prompt(plan_date, fast) + ("" if fast else GROQ_NOTE)},
                     {"role": "user", "content": first}]
 
@@ -231,38 +323,44 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
     turns, model = 0, primary
     while turns < config.MAX_TURNS:
         shrink_history(messages)
-        model, free_in = next_model(primary, time.monotonic())
+        model, free_in = next_model(primary, time.monotonic(), provider, discovered)
         if model is None:  # every model is at its limit
             if config.FALLBACK_TO_BUILTIN and (free_in > SHORT_WAIT_S or waited + free_in > WAIT_BUDGET_S):
-                raise A.AIBusy(f"Every Groq model is at its free-tier limit for about {free_in:.0f} more seconds.")
+                raise A.AIBusy(f"Every {info.label} model is at its free-tier limit for about {free_in:.0f} more "
+                               "seconds.")
             if waits >= MAX_RATE_WAITS:
-                raise A.AIBusy("Groq kept rate-limiting us.")
+                raise A.AIBusy(f"{info.label} kept rate-limiting us.")
             waits += 1
             waited += free_in
-            A._emit({"type": "wait", "text": f"Waiting {free_in:.0f} s for Groq's free-tier limit…"})
+            A._emit({"type": "wait", "text": f"Waiting {free_in:.0f} s for {info.label}'s free-tier limit…"})
             sleep(free_in)
             continue
         try:
             resp = client.chat.completions.create(model=model, messages=_wire(messages), tools=tools,
                                                   tool_choice="auto", temperature=0.3,
-                                                  max_completion_tokens=MAX_COMPLETION_TOKENS,
-                                                  **model_options(model))
+                                                  **{info.token_param: MAX_COMPLETION_TOKENS},
+                                                  **model_options(model, provider))
         except Exception as exc:
             wait = _retry_after(exc)
             if wait is not None:
-                _cool(model, wait)
+                _cool(model, wait, provider)
                 if getattr(exc, "status_code", None) == 413:
                     shrink_history(messages, keep=0)  # request too big for the minute: shrink everything
-                following, _ = next_model(primary, time.monotonic())
+                following, _ = next_model(primary, time.monotonic(), provider, discovered)
                 if following:
-                    A._emit({"type": "wait", "text": f"{model} is at Groq's free-tier limit; switching to "
+                    A._emit({"type": "wait", "text": f"{model} is at {info.label}'s free-tier limit; switching to "
                                                      f"{following}."})
                 continue
             if _missing_model(exc):
                 with _models_lock:
-                    _unavailable.add(model)
+                    _unavailable.add(f"{provider}:{model}")
                 continue
-            # Groq rejects a reply whose tool call it couldn't parse; asking again usually works.
+            if getattr(exc, "status_code", None) == 400 and "reasoning" in str(exc).lower() \
+                    and model_options(model, provider):
+                with _models_lock:  # this model doesn't take the setting: ask again without it
+                    _no_reasoning.add(f"{provider}:{model}")
+                continue
+            # A reply whose tool call the service couldn't parse; asking again usually works.
             if "tool_use_failed" in str(exc) and bad_tool_retries < MAX_BAD_TOOL_RETRIES:
                 bad_tool_retries += 1
                 continue
@@ -270,7 +368,7 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
         turns += 1
         run.num_turns += 1
         msg = resp.choices[0].message
-        assistant = {"role": "assistant", "content": msg.content or ""}
+        assistant = {"role": "assistant", "content": msg.content or ("" if not msg.tool_calls else None)}
         if msg.tool_calls:
             assistant["tool_calls"] = [{"id": tc.id, "type": "function",
                                         "function": {"name": tc.function.name,

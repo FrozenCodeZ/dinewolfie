@@ -7,6 +7,8 @@ pytest==9.1.1
 
 # Hosted site: Groq engine, Google Sheet accounts, Google sign-in
 groq==1.7.0
+# Optional engines: Gemini and Cerebras through their OpenAI-compatible APIs
+openai==3.19.1
 gspread==6.2.1
 Authlib==1.8.0
 # Hosted site: email + password accounts and per-account memory (optional)

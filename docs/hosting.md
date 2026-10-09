@@ -4,7 +4,7 @@ On your own computer, DineWolfie uses your Claude plan login and saves memory to
 
 | Need | Hosted solution |
 |---|---|
-| An AI engine | **Claude** (Anthropic API key) or **Groq** (free tier), picked in the sidebar |
+| An AI engine | **Claude** (Anthropic API key), or **Groq**, **Gemini** or **Cerebras** (all have free tiers), or **Built-in** (no AI), picked in the sidebar |
 | Keys | Visitors paste their own, **or** you put yours in Streamlit **Secrets** (only signed-in users can use them) |
 | Accounts | **Email + password** with **Supabase** (recommended), and/or **Sign in with Google** (`st.login`) |
 | Memory that lasts | One row per account in a **Supabase** table (email accounts) or a **Google Sheet** (Google sign-in) |
@@ -12,7 +12,18 @@ On your own computer, DineWolfie uses your Claude plan login and saves memory to
 
 Guests who don't sign in still get a working app: their memory lives only in their browser tab.
 
-Everything below is free. Do step 1, then **either** step 2 (Supabase, about 10 minutes, one service) **or** steps 3 and 4 (Google, about 30 minutes, two setups). You can also do both: the sidebar then offers both ways to sign in.
+Everything below is free. Do step 1, then step 2.
+
+**Where memory lives: Supabase (decided).** We compared it with the Google Sheet:
+
+| | Supabase (step 2) | Google Sheet (steps 3-4) |
+|---|---|---|
+| Setup | ~10 min, one service | ~30 min: Google sign-in plus a service account |
+| Privacy | The database itself only lets each person reach their own row (tested) | The app can see every row; only our code keeps people apart |
+| Staying signed in | 30 days on that browser ("Keep me signed in") | Yes (Google's login) |
+| Catch | Free projects pause after a week idle; the keep-alive job below prevents it | Google API quotas; no pausing |
+
+Steps 3 and 4 still work if you already set them up, but you don't need them.
 
 ---
 
@@ -20,7 +31,11 @@ Everything below is free. Do step 1, then **either** step 2 (Supabase, about 10 
 
 - **Groq (free):** https://console.groq.com/keys → Create API key (starts with `gsk_`).
 - **Anthropic (paid per use):** https://console.anthropic.com → API keys. The default is **Claude Haiku 5.5 in fast mode**: about 28,000 input and 4,000 output tokens per full-day plan in our test, which is **under 1 cent** at Haiku's list price ($0.10 / $0.50 per million tokens). The old setup (Claude Opus 5.5, step-by-step loop) measured about $0.47 per plan. To use a bigger model for everyone, add `DINEWOLFIE_MODEL = "claude-sonnet-5-5"` to Secrets.
+- **Gemini (optional, free tier):** https://aistudio.google.com/apikey → Create API key.
+- **Cerebras (optional, free tier):** https://cloud.cerebras.ai → API Keys.
 - **Tavily (optional, free tier):** https://app.tavily.com → API key (starts with `tvly-`).
+
+Gemini and Cerebras pick their model automatically ("Newest available"): the app asks the service which models it has, so renamed models keep working. Visitors can also paste their own key for any engine.
 
 In Streamlit Cloud: your app → **⋮ → Settings → Secrets**, and paste:
 
@@ -28,6 +43,8 @@ In Streamlit Cloud: your app → **⋮ → Settings → Secrets**, and paste:
 hosted = true
 GROQ_API_KEY = "gsk_..."
 ANTHROPIC_API_KEY = "sk-ant-..."   # optional
+GEMINI_API_KEY = "..."             # optional
+CEREBRAS_API_KEY = "..."           # optional
 TAVILY_API_KEY = "tvly-..."        # optional
 allowed_emails = []                # e.g. ["you@stonybrook.edu", "teammate@stonybrook.edu"]
 ```
@@ -63,11 +80,11 @@ The sidebar now shows **Sign in** and **Create account**. A new user gets a conf
 - **Only about 2 emails per hour** come from Supabase's built-in email sender, and that limit is shared by the whole project. If several people sign up at once (a demo, a class), the rest see "Too many sign-up emails". Two fixes:
   - Easiest: in **Authentication**, open the **Email** sign-in provider's settings and turn off **Confirm email**. New accounts work right away, but anyone can sign up with an email address they don't own. That's fine for food preferences. But if you use `allowed_emails` to protect your API keys, it no longer proves who someone is, so keep confirmation on in that case.
   - Better: connect your own email sender in **Authentication**'s settings (look for **SMTP Settings**; Resend's free plan works).
-- **Free projects pause after about a week with no activity.** While paused, the sign-in form shows an error and nobody's saved memory loads; the app still works for guests. Restore it from the Supabase dashboard, and check it a day before any demo.
-- **Signing in lasts for the browser tab.** Reloading the page signs you out, and you sign in again; your memory is still saved.
+- **Free projects pause after about a week with no activity.** While paused, nobody can sign in (the app still works for guests). To prevent it, turn on the keep-alive job: in GitHub, open the repo → **Settings → Secrets and variables → Actions → New repository secret**, and add `SUPABASE_URL` and `SUPABASE_KEY` (the same two values as above). The job in `.github/workflows/supabase-keepalive.yml` then pings the database every 3 days; run it once by hand from the **Actions** tab to check it says a date. If the project does pause, restore it from the Supabase dashboard.
+- **Staying signed in:** "Keep me signed in on this device" (on by default) remembers you for 30 days in that browser, so reloading doesn't sign you out. Untick it on a shared computer; **Sign out** forgets it.
 - There's no "forgot password" button yet. You can delete a user under **Authentication → Users** so they can sign up again; that also deletes their saved memory.
 
-## 3. Google sign-in (15 minutes, optional)
+## 3. Google sign-in (15 minutes, optional; not needed with Supabase)
 
 1. Go to https://console.cloud.google.com, create a project called `DineWolfie` (top bar → project picker → **New project**).
 2. **APIs & Services → OAuth consent screen**: choose **External**, app name `DineWolfie`, your email for support and developer contact. Under **Audience/Test users**, add your team's emails while the app is in "Testing".

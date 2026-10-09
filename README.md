@@ -186,7 +186,7 @@ You ──goal──▶ Claude (Agent SDK loop) ──tools──▶ Nutrislice 
 
 ## Hosted website
 
-The public site can't use your Claude login, so it lets you pick **Claude** (Anthropic API key) or **Groq** (free tier) in the sidebar. Keys come from the visitor or from your Streamlit secrets (only signed-in users can use yours). People **create an account with email and password** (Supabase; each person's memory is saved to their own database row, protected by row-level security) or **sign in with Google** (memory in a Google Sheet). Guests get memory that lasts only for their browser tab. An optional **Tavily** key lets the agent look up nutrition for items the menu leaves blank; those numbers are labeled as web estimates and never counted in totals.
+The public site can't use your Claude login, so it lets you pick **Claude** (Anthropic API key), **Groq**, **Gemini** or **Cerebras** (free tiers), or **Built-in** (no AI) in the sidebar. Keys come from the visitor or from your Streamlit secrets (only signed-in users can use yours). People **create an account with email and password** (Supabase; each person's memory is saved to their own database row, protected by row-level security, and they stay signed in for 30 days on that browser). Google sign-in with a Google Sheet also still works, but Supabase is the recommended setup. Guests get memory that lasts only for their browser tab. An optional **Tavily** key lets the agent look up nutrition for items the menu leaves blank; those numbers are labeled as web estimates and never counted in totals.
 
 Step-by-step setup: [docs/hosting.md](docs/hosting.md). All settings: [.streamlit/secrets.toml.example](.streamlit/secrets.toml.example).
 

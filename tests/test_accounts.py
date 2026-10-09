@@ -22,14 +22,15 @@ class FakeSupabase:
         self.users = users if users is not None else {}  # email -> (user_id, password)
         self.confirm_email, self.current, self.refreshes = confirm_email, None, 0
         self.auth = SimpleNamespace(sign_in_with_password=self._sign_in, sign_up=self._sign_up,
-                                    sign_out=self._sign_out, get_session=self._get_session)
+                                    sign_out=self._sign_out, get_session=self._get_session,
+                                    refresh_session=self._refresh)
 
     def _sign_in(self, creds):
         uid, pw = self.users.get(creds["email"], (None, None))
         if uid is None or pw != creds["password"]:
             raise FakeAuthError("invalid_credentials")
         self.current = uid
-        return SimpleNamespace(user=SimpleNamespace(id=uid, email=creds["email"]), session=SimpleNamespace())
+        return SimpleNamespace(user=SimpleNamespace(id=uid, email=creds["email"]), session=self._new_session())
 
     def _sign_up(self, creds):
         if creds["email"] in self.users:
@@ -39,10 +40,25 @@ class FakeSupabase:
         if self.confirm_email:
             return SimpleNamespace(user=SimpleNamespace(id=uid, email=creds["email"]), session=None)
         self.current = uid
-        return SimpleNamespace(user=SimpleNamespace(id=uid, email=creds["email"]), session=SimpleNamespace())
+        return SimpleNamespace(user=SimpleNamespace(id=uid, email=creds["email"]), session=self._new_session())
 
     def _sign_out(self):
         self.current = None
+
+    def _new_session(self):
+        self.tokens_issued = getattr(self, "tokens_issued", 0) + 1
+        token = f"rt-{self.current}-{self.tokens_issued}"
+        self.valid_tokens = getattr(self, "valid_tokens", {})
+        self.valid_tokens[token] = self.current
+        return SimpleNamespace(refresh_token=token)
+
+    def _refresh(self, token):
+        uid = getattr(self, "valid_tokens", {}).pop(token, None)  # each token works once, like Supabase
+        if uid is None:
+            raise FakeAuthError("refresh_token_not_found", "Invalid Refresh Token")
+        self.current = uid
+        email = next(e for e, (u, _) in self.users.items() if u == uid)
+        return SimpleNamespace(user=SimpleNamespace(id=uid, email=email), session=self._new_session())
 
     def _get_session(self):
         self.refreshes += 1
@@ -207,3 +223,34 @@ def test_app_misconfigured_supabase_shows_an_error_not_a_crash(monkeypatch):
     next(b for b in at.button if b.label == "Sign in").click().run()
     assert not at.exception
     assert any("Invalid URL" in err.value for err in at.error)
+
+
+# --- staying signed in across reloads -------------------------------------------------------------
+
+def test_restore_signs_back_in_once_per_token():
+    sb = FakeSupabase(users={"wolf@x.edu": ("u-wolf", "password1")})
+    first = accounts.sign_in(sb, "wolf@x.edu", "password1")
+    again = accounts.restore(sb, first.refresh_token)
+    assert again.user_id == "u-wolf" and again.email == "wolf@x.edu"
+    assert again.refresh_token != first.refresh_token  # rotated, like Supabase does
+    with pytest.raises(accounts.AccountError):
+        accounts.restore(sb, first.refresh_token)  # the old one no longer works
+
+
+def test_cookie_script_saves_and_clears_safely():
+    saved = accounts.cookie_script('abc"</script><b>')
+    assert "dinewolfie_session=" in saved and "max-age=2592000" in saved
+    assert saved.count("</script>") == 1  # the token can't close the script tag early
+    assert "\\u003c/script>" in saved
+    assert "max-age=0" in accounts.cookie_script(None)
+
+
+def test_app_sign_in_saves_the_stay_signed_in_cookie(monkeypatch):
+    fake = FakeSupabase(users={"wolf@stonybrook.edu": ("u-wolf", "password1")})
+    at = _app(monkeypatch, fake)
+    at.run()
+    at.text_input(key="si_email").input("wolf@stonybrook.edu")
+    at.text_input(key="si_password").input("password1")
+    next(b for b in at.button if b.label == "Sign in").click().run()
+    scripts = [h.proto.body for h in at.get("html")]
+    assert any("dinewolfie_session=" in body and "rt-u-wolf-1" in body for body in scripts)

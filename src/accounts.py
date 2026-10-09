@@ -10,9 +10,12 @@ that person's sign-in. Nothing here is shared between visitors.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 
 MIN_PASSWORD = 8
+COOKIE = "dinewolfie_session"
+REMEMBER_DAYS = 30
 
 
 class AccountError(Exception):
@@ -23,6 +26,8 @@ class AccountError(Exception):
 class Account:
     user_id: str
     email: str
+    # Lets this browser stay signed in (saved in a cookie; Supabase swaps it for a new one each use).
+    refresh_token: str | None = field(default=None, repr=False)
 
 
 def make_client(url: str, key: str):
@@ -77,7 +82,7 @@ def sign_in(client, email: str, password: str) -> Account:
         raise AccountError(friendly_error(exc)) from exc
     if res.user is None or res.session is None:
         raise AccountError("Sign-in didn't go through. Try again.")
-    return Account(str(res.user.id), res.user.email or email)
+    return Account(str(res.user.id), res.user.email or email, res.session.refresh_token)
 
 
 def sign_up(client, email: str, password: str) -> Account | None:
@@ -89,8 +94,30 @@ def sign_up(client, email: str, password: str) -> Account | None:
     except Exception as exc:
         raise AccountError(friendly_error(exc)) from exc
     if res.user is not None and res.session is not None:  # "Confirm email" is off in Supabase
-        return Account(str(res.user.id), res.user.email or email)
+        return Account(str(res.user.id), res.user.email or email, res.session.refresh_token)
     return None
+
+
+def restore(client, refresh_token: str) -> Account:
+    """Sign back in from the token saved in this browser's cookie (page reloads, new tabs)."""
+    try:
+        res = client.auth.refresh_session(refresh_token)
+    except Exception as exc:
+        raise AccountError(friendly_error(exc)) from exc
+    if res.user is None or res.session is None:
+        raise AccountError("Your saved sign-in has expired. Sign in again.")
+    return Account(str(res.user.id), res.user.email or "", res.session.refresh_token)
+
+
+def cookie_script(refresh_token: str | None) -> str:
+    """JavaScript that saves (or, with None, deletes) the sign-in cookie in this browser.
+    Streamlit can read cookies but not write them, so the page does it."""
+    if refresh_token:
+        value, age = json.dumps(refresh_token).replace("<", "\\u003c"), REMEMBER_DAYS * 86400
+        return (f"<script>document.cookie = '{COOKIE}=' + encodeURIComponent({value}) + "
+                f"'; path=/; max-age={age}; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');"
+                "</script>")
+    return f"<script>document.cookie = '{COOKIE}=; path=/; max-age=0; SameSite=Lax';</script>"
 
 
 def sign_out(client) -> None:

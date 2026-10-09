@@ -19,6 +19,8 @@ def offline_sample(tmp_path, monkeypatch):
     locations._memo.clear()
     groq_agent._cooldown.clear()      # rate-limit state is shared per process; start each test clean
     groq_agent._unavailable.clear()
+    groq_agent._no_reasoning.clear()
+    groq_agent._discovered.clear()
     monkeypatch.setattr(config, "PREFS_FILE", tmp_path / "prefs.json")
     monkeypatch.setattr(config, "HISTORY_FILE", tmp_path / "history.json")
     T.clear_cache()

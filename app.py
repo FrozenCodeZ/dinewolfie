@@ -16,6 +16,7 @@ import config
 from src import access, accounts, locations, notify, storage
 from src import tools as T
 from src.agent import Engine, default_goal, run_agent
+from src.groq_agent import PROVIDERS, model_settings
 
 st.set_page_config(page_title="DineWolfie", page_icon="🐺", layout="wide")
 
@@ -166,6 +167,8 @@ def secret(name: str, default=None):
 # Model choices can also come from secrets on the hosted site.
 config.MODEL = secret("DINEWOLFIE_MODEL") or config.MODEL
 config.GROQ_MODEL = secret("DINEWOLFIE_GROQ_MODEL") or config.GROQ_MODEL
+config.GEMINI_MODEL = secret("DINEWOLFIE_GEMINI_MODEL") or config.GEMINI_MODEL
+config.CEREBRAS_MODEL = secret("DINEWOLFIE_CEREBRAS_MODEL") or config.CEREBRAS_MODEL
 
 # Streamlit Community Cloud runs apps from /mount/src/<repo>; `hosted = true` in secrets also works.
 HOSTED = bool(secret("hosted", False)) or str(config.ROOT).replace("\\", "/").startswith("/mount/src")
@@ -179,8 +182,39 @@ SUPABASE_URL, SUPABASE_KEY = (_sb.get("url") or "").strip(), (_sb.get("key") or 
 SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_KEY)
 AUTH_ENABLED = GOOGLE_ENABLED or SUPABASE_ENABLED
 
+def supabase_client():
+    """This browser session's own Supabase client (it holds this person's sign-in)."""
+    if "sb_client" not in st.session_state:
+        st.session_state.sb_client = accounts.make_client(SUPABASE_URL, SUPABASE_KEY)
+    return st.session_state.sb_client
+
+
+def remember_cookie(token: str | None) -> None:
+    """Save (or with None, delete) the stay-signed-in cookie on the next page render."""
+    st.session_state.cookie_pending = token or ""
+
+
 GOOGLE_SIGNED_IN = bool(GOOGLE_ENABLED and st.user.is_logged_in)
 ACCOUNT = st.session_state.get("account") if SUPABASE_ENABLED else None  # accounts.Account or None
+if SUPABASE_ENABLED and ACCOUNT is None and not st.session_state.get("restore_tried"):
+    # A reload or a new tab starts a fresh session: sign back in from this browser's cookie.
+    st.session_state.restore_tried = True
+    saved = st.context.cookies.get(accounts.COOKIE)
+    if saved:
+        try:
+            ACCOUNT = st.session_state.account = accounts.restore(supabase_client(), saved)
+            remember_cookie(ACCOUNT.refresh_token)  # Supabase hands out a new token each time
+        except Exception:
+            remember_cookie(None)  # expired or revoked: forget it
+elif ACCOUNT is not None and ACCOUNT.refresh_token and st.session_state.get("remember", True):
+    # Supabase renews the sign-in about hourly; keep the cookie in step with it.
+    try:
+        session = supabase_client().auth.get_session()
+        if session and session.refresh_token != ACCOUNT.refresh_token:
+            ACCOUNT.refresh_token = session.refresh_token
+            remember_cookie(session.refresh_token)
+    except Exception:
+        pass
 SIGNED_IN = GOOGLE_SIGNED_IN or ACCOUNT is not None
 if GOOGLE_SIGNED_IN:
     USER_EMAIL, USER_NAME = (st.user.get("email") or "").lower(), st.user.get("name") or ""
@@ -189,12 +223,6 @@ elif ACCOUNT is not None:
 else:
     USER_EMAIL, USER_NAME = "", ""
 
-
-def supabase_client():
-    """This browser session's own Supabase client (it holds this person's sign-in)."""
-    if "sb_client" not in st.session_state:
-        st.session_state.sb_client = accounts.make_client(SUPABASE_URL, SUPABASE_KEY)
-    return st.session_state.sb_client
 
 
 @st.cache_resource(show_spinner=False)
@@ -275,6 +303,9 @@ MEMORY_WHERE = {
 }[STORE.kind if STORE is not None and STORE.kind != "file" else None]
 
 e = html.escape
+
+if "cookie_pending" in st.session_state:  # write (or clear) the stay-signed-in cookie in this browser
+    st.html(accounts.cookie_script(st.session_state.pop("cookie_pending") or None), unsafe_allow_javascript=True)
 
 
 # ---------------------------------------------------------------------------------------
@@ -439,6 +470,7 @@ def sign_out_account() -> None:
     accounts.sign_out(supabase_client())
     for key in ("account", "sb_client", "store", "store_key", "store_error"):
         st.session_state.pop(key, None)
+    remember_cookie(None)
 
 
 def account_forms() -> None:
@@ -447,6 +479,9 @@ def account_forms() -> None:
     with sign_in_tab, st.form("sign_in"):
         email = st.text_input("Email", key="si_email")
         password = st.text_input("Password", type="password", key="si_password")
+        keep = st.checkbox("Keep me signed in on this device", value=True, key="si_keep",
+                           help=f"Remembers you for {accounts.REMEMBER_DAYS} days in this browser. Untick on a "
+                                "shared computer.")
         if st.form_submit_button("Sign in", type="primary", width="stretch"):
             try:
                 account = accounts.sign_in(supabase_client(), email, password)
@@ -454,6 +489,9 @@ def account_forms() -> None:
                 st.error(str(exc) if isinstance(exc, accounts.AccountError) else accounts.friendly_error(exc))
             else:
                 st.session_state.account = account
+                st.session_state.remember = keep
+                if keep:
+                    remember_cookie(account.refresh_token)
                 st.rerun()
     with create_tab, st.form("sign_up"):
         email = st.text_input("Email", key="su_email")
@@ -469,6 +507,7 @@ def account_forms() -> None:
                     st.success("Almost there: open the link we just emailed you, then sign in here.")
                 else:
                     st.session_state.account = account
+                    remember_cookie(account.refresh_token)
                     st.rerun()
 
 
@@ -493,10 +532,12 @@ with st.sidebar:
 
     # --- AI engine -----------------------------------------------------------------------
     st.markdown("### AI engine")
-    provider = st.radio("Engine", ["Claude", "Groq", "Built-in"], horizontal=True, key="provider",
-                        help="Claude runs through the Claude Agent SDK. Groq runs an open model through the same "
-                             "tools and checker. Built-in needs no AI or key: a simple planner in code (also used "
-                             "automatically when the AI is rate-limited).").lower().replace("-", "")
+    provider = st.radio("Engine", ["Claude", "Groq", "Gemini", "Cerebras", "Built-in"], horizontal=True,
+                        key="provider",
+                        help="Claude runs through the Claude Agent SDK. Groq, Gemini and Cerebras run through the "
+                             "same tools and checker (all three have free tiers). Built-in needs no AI or key: a "
+                             "simple planner in code, also used automatically when the AI is rate-limited."
+                        ).lower().replace("-", "")
     key_policy = dict(hosted=HOSTED, auth_enabled=AUTH_ENABLED, signed_in=SIGNED_IN, email=USER_EMAIL,
                       allowed_emails=list(secret("allowed_emails", []) or []),
                       open_to_all=bool(secret("share_keys_with_everyone", False)))
@@ -506,11 +547,13 @@ with st.sidebar:
         api_key, why, ENGINE_READY = None, access.NONE, True
         ENGINE = Engine("builtin")
     else:
-        env_name = "ANTHROPIC_API_KEY" if provider == "claude" else "GROQ_API_KEY"
-        pasted = st.text_input(f"Your {'Anthropic' if provider == 'claude' else 'Groq'} API key (optional)",
-                               type="password", key=f"key_{provider}",
-                               help="Used only in this browser tab; never saved.")
-        app_key = secret(env_name) or (os.getenv(env_name) if not HOSTED and provider == "groq" else None)
+        compat = PROVIDERS.get(provider)
+        env_name = compat.env_key if compat else "ANTHROPIC_API_KEY"
+        label = compat.label if compat else "Anthropic"
+        key_url = compat.key_url if compat else "https://console.anthropic.com"
+        pasted = st.text_input(f"Your {label} API key (optional)", type="password", key=f"key_{provider}",
+                               help=f"Used only in this browser tab; never saved. Get one at {key_url}")
+        app_key = secret(env_name) or (os.getenv(env_name) if not HOSTED and compat else None)
         api_key, why = access.choose_key(pasted, app_key, **key_policy)
         if provider == "claude" and api_key is None and not HOSTED:
             st.caption("Using this computer's Claude plan login.")
@@ -518,8 +561,11 @@ with st.sidebar:
         else:
             st.caption(access.explain(why, provider))
             ENGINE_READY = api_key is not None
-        model_list = config.CLAUDE_MODELS if provider == "claude" else config.GROQ_MODELS
-        default_model = config.MODEL if provider == "claude" else config.GROQ_MODEL
+        if compat:
+            default_model, fallbacks = model_settings(provider)
+            model_list = config.GROQ_MODELS if provider == "groq" else ["auto"] + fallbacks
+        else:
+            default_model, model_list = config.MODEL, config.CLAUDE_MODELS
         if default_model not in model_list:
             model_list = [default_model] + model_list
         # On the hosted site the owner's key always runs the default model, so a visitor can't
@@ -527,6 +573,7 @@ with st.sidebar:
         locked = HOSTED and why == access.APP
         model = st.selectbox("Model", model_list, index=model_list.index(default_model), key=f"model_{provider}",
                              disabled=locked,
+                             format_func=lambda m: "Newest available (auto)" if m == "auto" else m,
                              help="Listed fastest and cheapest first. Bigger models plan a little better but are "
                                   "slower and cost more." + (" Paste your own key to choose." if locked else ""))
         if locked:
