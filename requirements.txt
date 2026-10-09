@@ -9,3 +9,5 @@ pytest==9.1.1
 groq==1.7.0
 gspread==6.2.1
 Authlib==1.8.0
+# Hosted site: email + password accounts and per-account memory (optional)
+supabase==2.31.0

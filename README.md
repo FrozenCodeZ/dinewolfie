@@ -19,7 +19,7 @@ Built for the AI Community @ SBU Internal Competition 2026 (Agentic AI).
 | Agentic quality | What DineWolfie does |
 |---|---|
 | **Goal-directed** | Works toward your goal for the whole day (protein, calories, diet, location), not one question. |
-| **Plans** | Writes a step list (`make_plan`) before acting and rewrites it when it changes course. |
+| **Plans** | In thorough mode it writes a step list (`make_plan`) before acting and rewrites it when it changes course. In fast mode the app runs the standard lookups first and the model plans the whole day from one briefing (see [Fast and thorough](#fast-and-thorough)). |
 | **Uses real tools** | 11 tools: real SBU Nutrislice menus (saved copies), search, hall comparison, nutrition math, memory, plan checker. |
 | **Observes** | Every tool returns a `status` (`ok`, `no_menu_posted`, `no_matches`, `error`, `rejected`) that it must read. |
 | **Adapts** | Missing menu → other hall. Filter leaves nothing → other station. Goal unreachable → closest plan plus the exact gap and a fix. Network down → cached menus. Each change is logged (`log_adaptation`) and shown highlighted. |
@@ -37,6 +37,21 @@ Built for the AI Community @ SBU Internal Competition 2026 (Agentic AI).
 * **Follow-ups.** "Make dinner lighter" or "remember I'm allergic to soy": the agent continues the same conversation, updates memory if needed, and re-plans.
 
 The model decides; the code calculates. Every number you see comes from Python, never from the model, so it can't make up nutrition facts.
+
+## Fast and thorough
+
+DineWolfie runs in one of two modes (sidebar **Speed**, or `DINEWOLFIE_MODE` / `--thorough` in the terminal):
+
+| | **Fast** (default) | **Thorough** |
+|---|---|---|
+| Who does the lookups | The app's code reads your memory and recent plans and scouts both halls for every meal (tagged *auto* in the trace) | The model asks for each lookup itself, one tool call at a time |
+| Model calls per plan | Usually 1 (plus 1 per checker rejection) | About 12 |
+| Measured (Claude Haiku 5.5, sample menus) | 11-12 s, 2 turns | 37.5 s, 13 turns |
+| Still checked? | Yes: the same checker; a rejected plan goes back to the model to fix | Yes |
+
+Fast mode still leaves the decisions to the model: which hall for each meal, which items, the swaps, and how to work around a missing menu or an unreachable goal. It can also search the menus if the briefing lacks something. Thorough mode shows more of the agent's step-by-step reasoning, which is useful for a demo.
+
+The default Claude model is **Claude Haiku 5.5** (the fastest and cheapest). Pick Sonnet or Opus in the sidebar, or set `DINEWOLFIE_MODEL`.
 
 ---
 
@@ -155,6 +170,9 @@ You ──goal──▶ Claude (Agent SDK loop) ──tools──▶ Nutrislice 
 | `src/parse_menu.py` | Raw Nutrislice JSON → clean items (name, station, meals, nutrition, allergens, tags) |
 | `src/tools.py` | The agent's tools as plain, tested Python functions |
 | `src/agent.py` | System prompt + tools wired into the Claude Agent SDK; streams every step as an event |
+| `src/briefing.py` | Fast mode: runs the standard lookups in code and writes the briefing the model plans from |
+| `src/groq_agent.py` | The same agent loop for Groq models |
+| `src/accounts.py`, `src/storage.py` | Email accounts (Supabase) and where each person's memory is saved |
 | `app.py` | Streamlit UI: goal, live ticket rail, plan tray, memory editor, menu browser, history |
 | `src/cli.py` | Terminal mode with the same live trace |
 | `src/morning_run.py`, `src/notify.py` | Scheduled run and ntfy push |
@@ -162,7 +180,7 @@ You ──goal──▶ Claude (Agent SDK loop) ──tools──▶ Nutrislice 
 
 ## Hosted website
 
-The public site can't use your Claude login, so it lets you pick **Claude** (Anthropic API key) or **Groq** (free tier) in the sidebar. Keys come from the visitor or from your Streamlit secrets (only signed-in users can use yours). People **sign in with Google**, and each person's memory is saved to a **Google Sheet**. Guests get memory that lasts only for their browser tab. An optional **Tavily** key lets the agent look up nutrition for items the menu leaves blank; those numbers are labeled as web estimates and never counted in totals.
+The public site can't use your Claude login, so it lets you pick **Claude** (Anthropic API key) or **Groq** (free tier) in the sidebar. Keys come from the visitor or from your Streamlit secrets (only signed-in users can use yours). People **create an account with email and password** (Supabase; each person's memory is saved to their own database row, protected by row-level security) or **sign in with Google** (memory in a Google Sheet). Guests get memory that lasts only for their browser tab. An optional **Tavily** key lets the agent look up nutrition for items the menu leaves blank; those numbers are labeled as web estimates and never counted in totals.
 
 Step-by-step setup: [docs/hosting.md](docs/hosting.md). All settings: [.streamlit/secrets.toml.example](.streamlit/secrets.toml.example).
 

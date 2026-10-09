@@ -13,7 +13,7 @@ from datetime import date, timedelta
 import streamlit as st
 
 import config
-from src import access, notify, storage
+from src import access, accounts, notify, storage
 from src import tools as T
 from src.agent import Engine, default_goal, run_agent
 
@@ -169,10 +169,32 @@ config.GROQ_MODEL = secret("DINEWOLFIE_GROQ_MODEL") or config.GROQ_MODEL
 
 # Streamlit Community Cloud runs apps from /mount/src/<repo>; `hosted = true` in secrets also works.
 HOSTED = bool(secret("hosted", False)) or str(config.ROOT).replace("\\", "/").startswith("/mount/src")
-AUTH_ENABLED = bool(secret("auth"))
-SIGNED_IN = bool(AUTH_ENABLED and st.user.is_logged_in)
-USER_EMAIL = (st.user.get("email") or "").lower() if SIGNED_IN else ""
-USER_NAME = (st.user.get("name") or "") if SIGNED_IN else ""
+
+# Two ways to have an account, both optional:
+#   Google sign-in   Streamlit's built-in login ([auth] in secrets); memory in a Google Sheet
+#   Email + password Supabase Auth ([supabase] in secrets); memory in a Supabase table
+GOOGLE_ENABLED = bool(secret("auth"))
+_sb = secret("supabase") or {}
+SUPABASE_URL, SUPABASE_KEY = (_sb.get("url") or "").strip(), (_sb.get("key") or "").strip()
+SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_KEY)
+AUTH_ENABLED = GOOGLE_ENABLED or SUPABASE_ENABLED
+
+GOOGLE_SIGNED_IN = bool(GOOGLE_ENABLED and st.user.is_logged_in)
+ACCOUNT = st.session_state.get("account") if SUPABASE_ENABLED else None  # accounts.Account or None
+SIGNED_IN = GOOGLE_SIGNED_IN or ACCOUNT is not None
+if GOOGLE_SIGNED_IN:
+    USER_EMAIL, USER_NAME = (st.user.get("email") or "").lower(), st.user.get("name") or ""
+elif ACCOUNT is not None:
+    USER_EMAIL, USER_NAME = ACCOUNT.email, ""
+else:
+    USER_EMAIL, USER_NAME = "", ""
+
+
+def supabase_client():
+    """This browser session's own Supabase client (it holds this person's sign-in)."""
+    if "sb_client" not in st.session_state:
+        st.session_state.sb_client = accounts.make_client(SUPABASE_URL, SUPABASE_KEY)
+    return st.session_state.sb_client
 
 
 @st.cache_resource(show_spinner=False)
@@ -189,8 +211,21 @@ def example_prefs() -> dict:
 
 
 def choose_store():
-    """Signed in + Google Sheet -> your row in the sheet. Hosted guest -> this tab only. Local -> prefs.json."""
-    if SIGNED_IN:
+    """Email account -> your row in Supabase. Google + Sheet -> your row in the sheet.
+    Hosted guest -> this tab only. Local -> prefs.json."""
+    if ACCOUNT is not None:
+        key = f"supabase:{ACCOUNT.user_id}"
+        if st.session_state.get("store_key") != key:
+            try:
+                st.session_state.store = storage.SupabaseStore(supabase_client(), ACCOUNT.user_id)
+                st.session_state.pop("store_error", None)
+            except Exception as exc:  # database paused or misconfigured: keep working, just don't save
+                st.session_state.store = storage.MemoryStore(example_prefs())
+                st.session_state.store_error = (f"Couldn't open your saved memory ({exc}). This session works, "
+                                                "but changes won't be saved.")
+            st.session_state.store_key = key
+        return st.session_state.store
+    if GOOGLE_SIGNED_IN:
         key = f"sheet:{USER_EMAIL}"
         if st.session_state.get("store_key") != key:
             try:
@@ -216,6 +251,7 @@ MEMORY_WHERE = {
     None: "Saved in prefs.json on this computer.",
     "session": "Saved for this browser tab only (sign in to keep it).",
     "sheet": "Saved to your account.",
+    "supabase": "Saved to your account.",
 }[STORE.kind if STORE is not None and STORE.kind != "file" else None]
 
 e = html.escape
@@ -379,14 +415,57 @@ def tray_html(plan: dict) -> str:
 # ---------------------------------------------------------------------------------------
 # Sidebar: memory, data source, demo switches
 # ---------------------------------------------------------------------------------------
+def sign_out_account() -> None:
+    accounts.sign_out(supabase_client())
+    for key in ("account", "sb_client", "store", "store_key", "store_error"):
+        st.session_state.pop(key, None)
+
+
+def account_forms() -> None:
+    """Email + password sign-in and sign-up (Supabase)."""
+    sign_in_tab, create_tab = st.tabs(["Sign in", "Create account"])
+    with sign_in_tab, st.form("sign_in"):
+        email = st.text_input("Email", key="si_email")
+        password = st.text_input("Password", type="password", key="si_password")
+        if st.form_submit_button("Sign in", type="primary", width="stretch"):
+            try:
+                account = accounts.sign_in(supabase_client(), email, password)
+            except Exception as exc:  # AccountError is already in plain words; anything else is setup
+                st.error(str(exc) if isinstance(exc, accounts.AccountError) else accounts.friendly_error(exc))
+            else:
+                st.session_state.account = account
+                st.rerun()
+    with create_tab, st.form("sign_up"):
+        email = st.text_input("Email", key="su_email")
+        password = st.text_input(f"Password ({accounts.MIN_PASSWORD}+ characters)", type="password",
+                                 key="su_password")
+        if st.form_submit_button("Create account", width="stretch"):
+            try:
+                account = accounts.sign_up(supabase_client(), email, password)
+            except Exception as exc:
+                st.error(str(exc) if isinstance(exc, accounts.AccountError) else accounts.friendly_error(exc))
+            else:
+                if account is None:
+                    st.success("Almost there: open the link we just emailed you, then sign in here.")
+                else:
+                    st.session_state.account = account
+                    st.rerun()
+
+
 with st.sidebar:
-    if AUTH_ENABLED:
-        if SIGNED_IN:
-            st.markdown(f"Signed in as **{e(USER_NAME or USER_EMAIL)}**")
-            st.button("Sign out", on_click=st.logout)
-        else:
+    if GOOGLE_SIGNED_IN:
+        st.markdown(f"Signed in as **{e(USER_NAME or USER_EMAIL)}**")
+        st.button("Sign out", on_click=st.logout)
+    elif ACCOUNT is not None:
+        st.markdown(f"Signed in as **{e(ACCOUNT.email)}**")
+        st.button("Sign out", on_click=sign_out_account)
+    elif AUTH_ENABLED:
+        st.markdown("### Your account")
+        if GOOGLE_ENABLED:
             st.button("Sign in with Google", on_click=st.login, type="primary", width="stretch")
-            st.caption("Guest mode: your memory lasts until you close this tab.")
+        if SUPABASE_ENABLED:
+            account_forms()
+        st.caption("Or stay a guest: your memory lasts until you close this tab.")
     elif HOSTED:
         st.caption("Guest mode: your memory lasts until you close this tab.")
     if st.session_state.get("store_error"):
@@ -483,8 +562,11 @@ with st.sidebar:
                           "favorites": [d.strip() for d in favorites.split(",") if d.strip()],
                           "treats": treats, "cheat_days": cheat_days,
                           "meals_to_plan": meals or ["breakfast", "lunch", "dinner"]})
-            T.write_prefs(prefs)
-            st.toast("Memory saved")
+            try:
+                T.write_prefs(prefs)
+                st.toast("Memory saved")
+            except Exception as exc:
+                st.error(str(exc))
     if prefs.get("notes"):
         st.caption("Notes the agent saved: " + "; ".join(map(str, prefs["notes"])))
 
@@ -513,6 +595,8 @@ with st.sidebar:
 st.markdown('<div class="dw-word">Dine<span>Wolfie</span></div>'
             '<div class="dw-tag">Tell it what you\'re aiming for. It reads today\'s East and West menus, '
             'checks the nutrition, and plans your whole day of eating.</div>', unsafe_allow_html=True)
+if AUTH_ENABLED and not SIGNED_IN:  # on a phone the sidebar starts closed, so say where sign-in is
+    st.caption("You're a guest. Sign in from the sidebar to keep your memory and past plans.")
 
 tab_plan, tab_browse, tab_history, tab_how = st.tabs(["Plan my day", "Browse menus", "Past plans", "How it works"])
 

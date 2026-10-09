@@ -3,7 +3,8 @@
 Keys can come from two places:
   * the visitor pastes their own key: kept in their browser session only, never saved;
   * the app owner's keys in Streamlit secrets: these cost the owner money, so by default
-    only signed-in users may use them, and only emails on the allow list if there is one.
+    only signed-in users (Google or an email account) may use them, and only emails on the
+    allow list if there is one.
 """
 from __future__ import annotations
 
@@ -33,7 +34,7 @@ def explain(source: str, provider: str) -> str:
     return {
         YOURS: f"Using the {name} key you pasted (kept only in this browser tab).",
         APP: f"Using the app's {name} key.",
-        SIGN_IN: f"Sign in with Google to use the app's {name} key, or paste your own.",
+        SIGN_IN: f"Sign in to use the app's {name} key, or paste your own.",
         NOT_ALLOWED: f"Your account isn't on this app's list for the shared {name} key. Paste your own key.",
-        NONE: f"No {name} key yet. Paste one below.",
+        NONE: f"No {name} key yet. Paste one above.",
     }[source]

@@ -1,10 +1,11 @@
 """Where each person's memory (preferences + past plans) is kept.
 
-Three kinds of store, all with the same four methods:
+Four kinds of store, all with the same four methods:
 
-  FileStore    prefs.json + history.json on this computer (running locally, one person)
-  MemoryStore  kept only for one browser session (guests on the hosted site; resets on reload)
-  SheetStore   one row per signed-in user in a Google Sheet (accounts on the hosted site)
+  FileStore      prefs.json + history.json on this computer (running locally, one person)
+  MemoryStore    kept only for one browser session (guests on the hosted site; resets on reload)
+  SupabaseStore  one row per account in a Supabase table (email accounts on the hosted site)
+  SheetStore     one row per signed-in user in a Google Sheet (Google sign-in on the hosted site)
 
 The web app picks a store for each visitor and calls use(store). Everything else
 (tools.py) just calls current(), so the agent never needs to know where memory lives.
@@ -14,7 +15,7 @@ from __future__ import annotations
 
 import json
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import config
@@ -108,6 +109,55 @@ class SheetStore:
             self._row = cell.row if cell else None
         else:
             self.ws.update([row], f"A{self._row}:E{self._row}", value_input_option="RAW")
+
+    def load_prefs(self) -> dict | None:
+        return dict(self._prefs) if self._prefs is not None else None
+
+    def save_prefs(self, prefs: dict) -> None:
+        self._prefs = dict(prefs)
+        self._write()
+
+    def load_history(self) -> list[dict]:
+        return list(self._history)
+
+    def save_history(self, history: list[dict]) -> None:
+        self._history = list(history)
+        self._write()
+
+
+class SupabaseStore:
+    """One row per account in public.dinewolfie_memory (see supabase/schema.sql).
+
+    `client` is that person's signed-in Supabase client, so Row Level Security only ever lets it
+    touch their own row. The row is read once and cached; every save writes the whole row back.
+    """
+    kind = "supabase"
+    TABLE = "dinewolfie_memory"
+
+    def __init__(self, client, user_id: str):
+        self.client, self.user_id = client, str(user_id)
+        self._prefs: dict | None = None
+        self._history: list[dict] = []
+        self._load()
+
+    def _fresh(self):
+        self.client.auth.get_session()  # renews the sign-in if it has expired (tokens last an hour)
+        return self.client.table(self.TABLE)
+
+    def _load(self) -> None:
+        rows = self._fresh().select("prefs,history").eq("user_id", self.user_id).limit(1).execute().data
+        if rows:
+            self._prefs = rows[0].get("prefs") or None
+            self._history = rows[0].get("history") or []
+
+    def _write(self) -> None:
+        self._history = self._history[-HISTORY_LIMIT:]
+        row = {"user_id": self.user_id, "prefs": self._prefs or {}, "history": self._history,
+               "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        try:
+            self._fresh().upsert(row, on_conflict="user_id").execute()
+        except Exception as exc:
+            raise RuntimeError(f"Couldn't save to your account ({exc}).") from exc
 
     def load_prefs(self) -> dict | None:
         return dict(self._prefs) if self._prefs is not None else None

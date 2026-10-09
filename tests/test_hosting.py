@@ -233,10 +233,10 @@ def test_hosted_guest_gets_private_memory_and_no_shared_key(monkeypatch):
     assert not at.exception
     captions = " ".join(c.value for c in at.caption)
     assert "this browser tab only" in captions
-    assert "Sign in with Google to use the app's Anthropic key" in captions
+    assert "Sign in to use the app's Anthropic key" in captions
     plan_button = next(b for b in at.button if b.label == "Plan my day")
     plan_button.click().run()
-    assert any("Sign in with Google" in w.value for w in at.warning)
+    assert any("Sign in to use" in w.value for w in at.warning)
 
 
 # --- Groq lean mode + the "nothing matches" case ------------------------------------------------
