@@ -23,3 +23,8 @@ Thumbs.db
 
 # tool scratch
 .playwright-mcp/
+
+# private planning notes (kept locally, never pushed)
+docs/devpost.md
+docs/devpost-submission.md
+docs/demo-script.md
