@@ -27,11 +27,16 @@ REQUEST_TIMEOUT_S = 20
 POLITE_DELAY_S = 0.4  # pause between requests so we never hammer the server
 
 # The two all-you-care-to-eat dining halls. "school" is Nutrislice's word for a location.
-# Every other location (Roth Food Court, ...) is discovered from SCHOOLS_URL: see src/locations.py.
+# Every other location (Roth Cafe, ...) is discovered from SCHOOLS_URL: see src/locations.py.
 HALLS = {
     "East": {"school_id": 6333, "slug": "east-side-dining", "name": "East Side Dine-In"},
     "West": {"school_id": 6334, "slug": "west-side-dining", "name": "West Side Dine-In"},
 }
+
+# Roth Café's food concepts (from stonybrook.edu/dining). A Nutrislice location whose name mentions
+# Roth or one of these is gathered into the "Roth Cafe" location (src/locations.py).
+ROTH_WORDS = ("roth", "smash n", "smash-n", "fuze", "savor", "cocina fresca", "cocina-fresca", "popeyes",
+              "pasta saute", "pasta-saute", "the drop")
 
 # Menu types we skip because they only repeat other stations' items.
 SKIP_MENU_TYPE_SLUGS = {

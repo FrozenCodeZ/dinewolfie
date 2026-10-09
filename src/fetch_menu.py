@@ -32,7 +32,7 @@ class FetchError(Exception):
 
 @dataclass
 class Station:
-    hall: str          # the location's key: "East", "West", "Roth Food Court", ...
+    hall: str          # the location's key: "East", "West", "Roth Cafe", ...
     menu_type_id: int
     slug: str
     name: str          # human name, e.g. "Rooted"
@@ -132,21 +132,27 @@ def load_schools(offline: bool = False) -> list[dict]:
 
 
 def list_stations(hall: str, offline: bool = False) -> list[Station]:
-    """All active stations (Nutrislice "menu types") for a location ("East", "Roth Food Court"...)."""
+    """All active stations (Nutrislice "menu types") for a location ("East", "Roth Cafe"...)."""
     from src import locations  # imported here: locations imports this module
     schools = load_schools(offline=offline)
     try:
         loc = locations.get(hall, locations.from_schools(schools))
     except ValueError as exc:
         raise FetchError(str(exc)) from exc
+    stations = []
     for school in schools:
-        if school["id"] == loc.school_id:
-            return [
-                Station(loc.key, mt["id"], mt["slug"], mt["name"], loc.school_id)
-                for mt in school.get("active_menu_types", [])
-                if mt["slug"] not in config.SKIP_MENU_TYPE_SLUGS
-            ]
-    raise FetchError(f"{loc.name} isn't listed on Nutrislice right now.")
+        if school["id"] not in loc.school_ids:
+            continue
+        for mt in school.get("active_menu_types", []):
+            if mt["slug"] in config.SKIP_MENU_TYPE_SLUGS:
+                continue
+            # In a group (Roth Cafe) the concept's own name is the useful one: "Smash n' Shake".
+            name = mt["name"] if not loc.members else (
+                school["name"] if mt["name"].lower() in school["name"].lower() else f"{school['name']}: {mt['name']}")
+            stations.append(Station(loc.key, mt["id"], mt["slug"], name, school["id"]))
+    if not stations:
+        raise FetchError(f"{loc.name} isn't listed on Nutrislice right now.")
+    return stations
 
 
 # --- menus --------------------------------------------------------------------

@@ -41,7 +41,7 @@ SERVER = "dinewolfie"
 # (name, description, JSON schema, python function, read-only?)
 _DATE = {"type": "string", "description": "YYYY-MM-DD, 'today' or 'tomorrow'. Defaults to today."}
 _MEAL = {"type": "string", "enum": ["breakfast", "brunch", "lunch", "dinner", "late_night"]}
-_HALL = {"type": "string", "description": "East, West, or another SBU location by name (e.g. Roth Food Court)."}
+_HALL = {"type": "string", "description": "East, West, or another SBU location by name (e.g. Roth Cafe)."}
 _STRS = {"type": "array", "items": {"type": "string"}}
 _ITEMS = {"type": "array", "items": {
     "type": "object",
@@ -323,7 +323,7 @@ def build_server(fast: bool = False):
 
 SYSTEM_PROMPT = """You are DineWolfie, a meal-planning agent for Stony Brook University dining. The main places \
 are the two all-you-care-to-eat halls, East Side Dine-In ("East") and West Side Dine-In ("West"), paid with a \
-meal swipe. Other locations such as Roth Food Court are retail, paid with dining dollars: use one only when the \
+meal swipe. Other locations such as Roth Cafe are retail, paid with dining dollars: use one only when the \
 user asks for it or lists it in extra_locations, and mention that it costs dining dollars. A student tells you \
 a goal; you plan their day of eating from the real menus.
 

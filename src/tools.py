@@ -170,7 +170,7 @@ DEFAULT_PREFS = {
     "treats": "sometimes",   # never | sometimes | often
     "cheat_days": [],        # e.g. ["Friday"]: relaxed calories, a treat is welcome
     "meals_to_plan": ["breakfast", "lunch", "dinner"],
-    "extra_locations": [],   # other places to consider besides East and West, e.g. ["Roth Food Court"]
+    "extra_locations": [],   # other places to consider besides East and West, e.g. ["Roth Cafe"]
     "notes": [],
 }
 TREAT_LEVELS = ("never", "sometimes", "often")
@@ -213,7 +213,7 @@ def allergen_codes(allergies: list[str]) -> set[str]:
 
 
 def normalize_hall(hall: str) -> str:
-    """Any location's key: "west side" -> "West", "roth" -> "Roth Food Court"."""
+    """Any location's key: "west side" -> "West", "roth" -> "Roth Cafe"."""
     return locations.get(hall).key
 
 

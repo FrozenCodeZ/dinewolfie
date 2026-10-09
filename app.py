@@ -630,7 +630,7 @@ with st.sidebar:
         other_places = [loc.key for loc in locations.all_locations() if loc.key not in config.HALLS]
         extra_places = st.multiselect(
             "Also eat at", other_places, [p for p in prefs.get("extra_locations") or [] if p in other_places],
-            help="Places besides East and West the agent may use, like Roth Food Court. These are paid with "
+            help="Places besides East and West the agent may use, like Roth Cafe. These are paid with "
                  "dining dollars, not a meal swipe." if other_places else
                  "Other SBU locations appear here once the app has loaded Nutrislice's list of locations.")
         if st.form_submit_button("Save memory"):
@@ -834,7 +834,19 @@ with tab_browse:
                "find each item in the Nutrislice app. Nutrition is per serving.")
     b1, b2, b3 = st.columns(3)
     b_date = b1.date_input("Date", date.today())
-    b_hall = b2.selectbox("Location", [loc.key for loc in locations.all_locations()])
+    known_places = locations.all_locations()
+    b_hall = b2.selectbox("Location", [loc.key for loc in known_places])
+    with st.expander(f"All SBU locations DineWolfie found on Nutrislice ({len(known_places)})"):
+        if locations.last_error:
+            st.warning(f"Couldn't load the full list of locations, so only East and West are shown: "
+                       f"{locations.last_error}")
+        elif not config.LIVE_FETCH and len(known_places) <= len(config.HALLS):
+            st.caption("Live fetching is off, so only East and West are known.")
+        st.caption("Roth Cafe gathers every location whose name mentions Roth or one of its concepts "
+                   "(Smash n' Shake, Fuze, Savor, Cocina Fresca, Popeyes, Pasta Sauté, The Drop).")
+        st.dataframe([{"Location": loc.key, "Nutrislice id": ", ".join(map(str, loc.school_ids)),
+                       "Pays with": loc.paid_with, "Includes": loc.name if loc.members else ""}
+                      for loc in known_places], hide_index=True, width="stretch")
     b_meal = b3.selectbox("Meal", ["breakfast", "lunch", "dinner", "late_night"],
                           format_func=lambda m: MEAL_LABEL[m])
     with st.spinner("Loading menu…"):

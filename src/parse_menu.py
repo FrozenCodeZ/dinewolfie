@@ -6,7 +6,7 @@ Real field names are documented in docs/data-notes.md. The output schema is:
       "id": "W1234567",            # location code + Nutrislice food id: E/W for the halls,
                                    # "L6401-1234567" for other locations (see src/locations.py)
       "date": "2026-10-03",
-      "hall": "West",              # the location's key: "East", "West", "Roth Food Court", ...
+      "hall": "West",              # the location's key: "East", "West", "Roth Cafe", ...
       "meals": ["lunch"],          # every meal this item is served at
       "station": "Rooted",
       "section": "Rooted Lunch Specials",

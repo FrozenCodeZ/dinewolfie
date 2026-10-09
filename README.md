@@ -132,7 +132,7 @@ In the web app the same switches are in the sidebar under **Demo: break things o
 
 **Menu data mode:** by default DineWolfie loads today's menus from Nutrislice (`DINEWOLFIE_DATA_MODE=live`). Use `--sample` (or `DINEWOLFIE_DATA_MODE=sample`) for the real menus saved in `data/sample/`, which work offline on any date.
 
-**Other locations:** besides East and West, DineWolfie can use every SBU location on Nutrislice, such as Roth Food Court (paid with dining dollars). List them with `python -m src.fetch_menu --locations`, add them in the sidebar under **Also eat at**, or just name one in your goal ("lunch at Roth").
+**Other locations:** besides East and West, DineWolfie can use every SBU location on Nutrislice, such as Roth Cafe (paid with dining dollars). List them with `python -m src.fetch_menu --locations`, add them in the sidebar under **Also eat at**, or just name one in your goal ("lunch at Roth").
 
 **No AI key?** Pick **Built-in** as the engine (or `DINEWOLFIE_ENGINE=builtin`): a simple planner in code that picks the best protein for the calories within your rules, checked the same way. It also takes over automatically when the AI service is rate-limited, and says so.
 
