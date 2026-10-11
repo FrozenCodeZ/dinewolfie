@@ -85,7 +85,7 @@ def test_the_memory_form_keeps_saved_names_with_commas_whole():
     ("Scalloped Potatoes", {"shellfish"}, []),
     ("2 Piece Fried Chicken|cooked in the fryer", {"gluten"}, []),
     ("Pitaya Bowl", {"gluten"}, []),
-    ("Waffle Fries", {"egg", "gluten"}, []),
+    ("Waffle Fries", {"egg", "gluten", "milk"}, ["gluten"]),  # seasoned ones are often coated in flour
     ("French Fries|potatoes, soybean oil", {"soy"}, []),
     ("Edamame|soybeans, salt", {"soy"}, ["soy"]),
     ("Overnight Oats|soy milk, oats", {"milk", "soy"}, ["soy"]),
@@ -429,3 +429,149 @@ def test_a_stale_tab_only_clears_the_cookie_if_it_is_still_its_own():
     assert "max-age=0" in script and "decodeURIComponent" in script
     assert "</script>\"" not in script and "\\u003c/script>" in script  # the token can't break out
     assert accounts.cookie_script(None).count("max-age=0") == 1  # signing out here clears it outright
+
+
+
+# --- found by the independent review of these fixes ---------------------------------------------------
+
+@pytest.mark.parametrize("allergy,dish", [("melon", "Watermelon Cubes"), ("corn", "Kettle Popcorn"),
+                                          ("berries", "Strawberries"), ("berries", "Blueberry Muffin"),
+                                          ("berry", "Strawberry Parfait"), ("mustard seed", "Honey Mustard Chicken"),
+                                          ("coconut oil", "Coconut Curry")])
+def test_an_unlabeled_allergy_is_found_inside_words_like_the_old_check(prefs, allergy, dish):
+    prefs()
+    assert T.update_prefs({"allergies": allergy})["status"] == "ok"
+    codes = T.allergen_codes(T.read_prefs()["allergies"])
+    assert T.allergy_conflicts(_dish(dish), codes)
+
+
+@pytest.mark.parametrize("name,codes,expected", [
+    ("Peanut Butter Cookie", {"milk", "egg"}, ["egg", "milk"]),  # baked goods are made with butter and eggs
+    ("Almond Butter Croissant", {"milk"}, ["milk"]),
+    ("Vegan Chocolate Chip Cookie|tags:vegan", {"milk", "egg"}, []),  # Nutrislice's vegan label: no milk or egg
+])
+def test_baked_goods_count_as_milk_and_egg_unless_labeled_vegan(name, codes, expected):
+    title, _, tags = name.partition("|tags:")
+    assert T.allergy_conflicts(_dish(title, tags=[tags] if tags else []), codes) == expected
+
+
+def test_the_memory_form_never_joins_two_saved_foods_into_one():
+    saved = ["Chicken, Grilled", "Fried Chicken", "Grilled Cheese"]
+    assert T.split_entries("Chicken, Grilled, Fried Chicken, Grilled Cheese", saved) == saved
+    assert T.split_entries("Chicken,Grilled , olives", saved) == ["Chicken, Grilled", "olives"]
+
+
+def test_compare_halls_still_works_when_a_saved_place_is_closed(prefs):
+    prefs(extra_locations=["Starbucks at the Library"])
+    result = T.compare_halls("lunch", SAMPLE_DATE)
+    assert result["status"] != "error", result
+    assert result["halls"]["East"]["matching_items"] > 0
+    assert result["halls"]["Starbucks at the Library"]["menu_status"] == "no_menu_posted"
+
+
+def test_a_database_that_is_down_is_not_asked_on_every_read(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(storage, "_clock", clock)
+    db, laptop, phone = _two_tabs()
+    calls = []
+    real = laptop._fresh
+
+    def down():
+        calls.append(1)
+        raise RuntimeError("paused")
+    clock.t += storage.SupabaseStore.REFRESH_S + 1
+    monkeypatch.setattr(laptop, "_fresh", down)
+    for _ in range(5):
+        laptop.load_prefs()
+    assert len(calls) == 1  # one failed try, then it waits before asking again
+    monkeypatch.setattr(laptop, "_fresh", real)
+
+
+def test_a_change_that_failed_to_save_is_not_wiped_by_the_next_reread(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(storage, "_clock", clock)
+    db, laptop, phone = _two_tabs()
+    real_save = laptop._save
+    monkeypatch.setattr(laptop, "_save", lambda column: (_ for _ in ()).throw(RuntimeError("Couldn't save")))
+    with pytest.raises(RuntimeError):
+        laptop.save_prefs({**T.DEFAULT_PREFS, "allergies": ["sesame"]})
+    clock.t += storage.SupabaseStore.REFRESH_S + 1
+    assert laptop.load_prefs()["allergies"] == ["sesame"]  # still enforced in this tab
+    monkeypatch.setattr(laptop, "_save", real_save)
+
+
+def test_the_form_says_which_fields_changed_elsewhere_while_editing():
+    base = {"allergies": [], "daily_protein_goal_g": 100, "never_eat": ["fries"]}
+    theirs = {"allergies": ["sesame"], "daily_protein_goal_g": 100, "never_eat": ["fries"]}
+    assert T.changed_elsewhere(base, theirs) == ["allergies"]
+
+
+
+@pytest.mark.parametrize("allergy,dish", [("pea", "Chickpea Curry"), ("seeds", "Flaxseed Muffin"),
+                                          ("tomatoes", "Tomato Basil Soup"), ("potatoes", "Baked Potato"),
+                                          ("strawberry", "Fresh Strawberries"), ("strawberries", "Strawberry Smoothie"),
+                                          ("fresh strawberries", "Strawberry Smoothie"), ("jalapeño", "Jalapeno Poppers"),
+                                          ("jalapeno", "Jalapeño Burger")])
+def test_more_unlabeled_allergies_found_in_plural_compound_and_accented_names(prefs, allergy, dish):
+    prefs()
+    assert T.update_prefs({"allergies": allergy})["status"] == "ok"
+    assert T.allergy_conflicts(_dish(dish), T.allergen_codes(T.read_prefs()["allergies"]))
+
+
+@pytest.mark.parametrize("dish", ["Pan-Seared Monkfish", "Smoked Whitefish Salad"])
+def test_fish_is_found_inside_a_fish_name(dish):
+    assert T.allergy_conflicts(_dish(dish), {"fish"}) == ["fish"]
+
+
+def test_the_agent_cannot_drop_a_gluten_free_diet(prefs):
+    prefs(diet=["gluten_free", "vegetarian"])
+    res = T.update_prefs(remove={"diet": ["gluten_free"]})
+    assert res["status"] == "error" and "memory form" in res["error"]
+    assert "gluten_free" in T.read_prefs()["diet"]
+    assert T.update_prefs(remove={"diet": ["vegetarian"]})["status"] == "ok"  # other diets can go
+
+
+def test_a_retry_after_in_odd_digits_still_pauses():
+    assert fetch_menu._pause_for(429, {"Retry-After": "²³"}) == fetch_menu.RATE_LIMIT_PAUSE_S
+
+
+def test_menus_far_from_today_come_from_the_cache_only(monkeypatch):
+    monkeypatch.setattr(config, "DATA_MODE", "live")
+    seen = []
+    monkeypatch.setattr(T, "fetch_hall_day", lambda hall, day, offline=False: seen.append(offline) or
+                        {"stations": [], "sources": {}, "errors": []})
+    for ahead in (3, -400, 60):
+        try:
+            T.load_items("East", config.today() + timedelta(days=ahead))
+        except fetch_menu.FetchError as exc:
+            assert "isn't saved" in str(exc)
+    assert seen == [False, True, True]
+
+
+def test_a_huge_allergy_entry_is_handled_quickly(prefs):
+    import time as _time
+    prefs()
+    start = _time.monotonic()
+    T.update_prefs({"allergies": "peanuts" + " " * 20000 + "&"})
+    T._as_list(" " * 50000 + "x", "allergies")
+    assert _time.monotonic() - start < 1
+
+
+def test_a_junk_cookie_can_still_be_cleared():
+    script = accounts.cookie_script(None, only_if="rt-1")
+    assert "try" in script and "catch" in script
+
+
+def test_a_google_account_tab_left_open_cannot_erase_an_allergy():
+    from tests.test_hosting import FakeWorksheet
+    ws = FakeWorksheet()
+    laptop = storage.SheetStore(ws, "wolf@sbu.edu")
+    phone = storage.SheetStore(ws, "wolf@sbu.edu")
+    storage.use(phone)
+    T.update_prefs({"allergies": "peanuts"})
+    storage.use(laptop)
+    T.append_history({"date": "2026-10-12", "headline": "x"})  # saves history only
+    T.update_prefs({"favorites": ["tofu"]})
+    saved = storage.SheetStore(ws, "wolf@sbu.edu")
+    assert saved.load_prefs()["allergies"] == ["peanuts"] and saved.load_prefs()["favorites"] == ["tofu"]
+    assert [h["date"] for h in saved.load_history()] == ["2026-10-12"]

@@ -61,6 +61,7 @@ def nutrislice(monkeypatch):
     monkeypatch.setattr(config, "POLITE_DELAY_S", 0)
     monkeypatch.setattr(fetch_menu, "_stopped_reason", None)
     monkeypatch.setattr(fetch_menu.requests, "get", fake_get)
+    monkeypatch.setattr(T, "FETCH_DAYS_BACK", 10_000)  # DAY is a fixed past date; treat it as current
     return sent
 
 

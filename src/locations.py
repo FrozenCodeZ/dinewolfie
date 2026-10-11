@@ -138,7 +138,7 @@ def get(name: str, locations: list[Location] | None = None) -> Location:
     if wanted:
         halls = {h.lower() for h in config.HALLS}
         listed = {loc.key.lower() for loc in locations}
-        closed = [loc for key, loc in _seen.items() if key not in listed]
+        closed = [loc for key, loc in list(_seen.items()) if key not in listed]  # a copy: others may add
         if ROTH_KEY.lower() not in listed and ROTH_KEY.lower() not in _seen:
             closed.append(ROTH_CLOSED)
         for pool in (locations, closed):  # open places first; then known places that are closed today

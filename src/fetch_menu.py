@@ -68,7 +68,7 @@ def _pause_for(status: int, headers) -> float:
     if status in (401, 403):
         return BLOCKED_PAUSE_S
     after = str((headers or {}).get("Retry-After") or "").strip()
-    if after.isdigit():
+    if re.fullmatch(r"[0-9]{1,9}", after):
         return min(MAX_PAUSE_S, max(MIN_PAUSE_S, float(after)))
     return RATE_LIMIT_PAUSE_S  # no wait given (or given as a date): an hour
 

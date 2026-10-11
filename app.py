@@ -662,7 +662,7 @@ with st.sidebar:
     prefs = T.read_prefs()
     # What the form showed on the last run: on Save, only what was changed here is applied on top of
     # what's saved now, so a change made in another tab or on the phone (a new allergy) isn't erased.
-    form_base = st.session_state.get("prefs_form_base") or prefs
+    form_base = st.session_state.get("prefs_form_base") or dict(prefs)
     st.session_state.prefs_form_base = dict(prefs)  # a copy: Save changes `prefs` below
 
     def with_saved(options: list, saved: list) -> list:
@@ -706,6 +706,9 @@ with st.sidebar:
                  "dining dollars, not a meal swipe." if other_places else
                  "Other SBU locations appear here once the app has loaded Nutrislice's list of locations.")
         if st.form_submit_button("Save memory"):
+            # Fields saved elsewhere since the form was shown were redrawn with the new value, so an edit
+            # to them here may not have come through: say which, so nothing is lost silently.
+            elsewhere = T.changed_elsewhere(form_base, prefs)
             prefs.update({"name": name, "diet": diet, "allergies": allergies,
                           "daily_protein_goal_g": protein or None, "daily_calorie_goal": calories or None,
                           "favorite_hall": None if fav == "No preference" else fav,
@@ -718,7 +721,11 @@ with st.sidebar:
             try:
                 T.reread_memory()
                 T.write_prefs(T.merge_form(form_base, prefs, T.read_prefs()))
-                st.toast("Memory saved")
+                if elsewhere:
+                    st.warning("Saved. These changed on another device or tab while you were editing, so check "
+                               "them: " + ", ".join(k.replace("_", " ") for k in elsewhere) + ".")
+                else:
+                    st.toast("Memory saved")
             except Exception as exc:
                 st.error(str(exc))
     if prefs.get("notes"):

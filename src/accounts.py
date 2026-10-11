@@ -279,8 +279,9 @@ def cookie_script(refresh_token: str | None, only_if: str | None = None) -> str:
     if not isinstance(only_if, str) or not only_if:
         return f"<script>{clear}</script>"
     mine = json.dumps(only_if).replace("<", "\\u003c")
-    return (f"<script>(function () {{ var m = document.cookie.match(/(?:^|; ){COOKIE}=([^;]*)/); "
-            f"if (m && decodeURIComponent(m[1]) === {mine}) {{ {clear} }} }})();</script>")
+    return (f"<script>(function () {{ var m = document.cookie.match(/(?:^|; ){COOKIE}=([^;]*)/); if (!m) return; "
+            f"var v; try {{ v = decodeURIComponent(m[1]); }} catch (e) {{ v = null; }} "
+            f"if (v === null || v === {mine}) {{ {clear} }} }})();</script>")  # a junk cookie is cleared too
 
 
 def sign_out(client, account: Account | None = None) -> bool:
