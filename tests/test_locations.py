@@ -182,7 +182,8 @@ def test_a_hall_with_nothing_posted_is_no_menu_not_an_error(nutrislice, prefs, m
     menu = T.get_menu("West", "lunch", DAY.isoformat())
     assert menu["status"] == "no_menu_posted" and "may be closed" in menu["summary"]
     scout = T.scout_meal("lunch", DAY.isoformat())
-    assert scout["halls"]["West"]["status"] == "no_menu_posted" and "West no menu posted" in scout["summary"]
+    assert scout["halls"]["West"]["status"] == "no_menu_posted"
+    assert "West has no menu posted (West Side Dine-In has no menus posted" in scout["summary"]
     assert scout["halls"]["East"]["status"] == "ok"
     # The list was fetched just now, so it isn't asked for again.
     assert sum(url == config.SCHOOLS_URL for url in nutrislice) == 1
@@ -201,18 +202,19 @@ def test_an_old_location_list_is_rechecked_once_when_a_hall_looks_empty(nutrisli
     assert sum(url == config.SCHOOLS_URL for url in nutrislice) == 1
 
 
-def test_scout_says_why_a_hall_could_not_load(nutrislice, prefs, monkeypatch):
+def test_a_hall_missing_from_nutrislice_counts_as_closed(nutrislice, prefs, monkeypatch):
+    """Over a break Nutrislice drops closed places from its list: that's "closed", not "couldn't load"."""
     prefs()
     monkeypatch.setattr(sys.modules[__name__], "SCHOOLS", [s for s in SCHOOLS if s["id"] != 6334])
     scout = T.scout_meal("lunch", DAY.isoformat())
-    assert scout["halls"]["West"]["status"] == "error"
-    assert "West couldn't load (West Side Dine-In isn't in Nutrislice's list" in scout["summary"]
+    assert scout["halls"]["West"]["status"] == "no_menu_posted"
+    assert "West has no menu posted (West Side Dine-In isn't on Nutrislice right now: probably closed" \
+        in scout["summary"]
 
 
-def test_a_missing_hall_error_names_what_nutrislice_does_list(nutrislice, monkeypatch):
-    """So a screenshot of the trace shows whether West was renamed, hidden or the list came back short."""
+def test_a_closed_hall_says_what_is_open_instead(nutrislice, monkeypatch):
     monkeypatch.setattr(sys.modules[__name__], "SCHOOLS", [s for s in SCHOOLS if s["id"] != 6334])
-    with pytest.raises(fetch_menu.FetchError) as err:
+    with pytest.raises(fetch_menu.NotPosted) as err:
         fetch_menu.list_stations("West")
-    assert "It lists 5 locations: East Side Dine-In, Smash n' Shake, Fuze at Roth, Starbucks at the Library" \
-        in str(err.value)
+    assert str(err.value).endswith("Open on Nutrislice now: East Side Dine-In, Smash n' Shake, Fuze at Roth, "
+                                   "Starbucks at the Library.")  # the closed one isn't listed

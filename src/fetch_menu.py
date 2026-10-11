@@ -169,11 +169,13 @@ def list_stations(hall: str, offline: bool = False) -> list[Station]:
         schools = load_schools(offline=offline, recheck=True)  # the saved list may be out of date
         mine = _schools_of(loc, schools)
     if not mine:
-        # Name what the list does hold, so the trace shows whether it was renamed or came back short.
-        names = [str(s.get("name") or s.get("slug") or s.get("id")) for s in schools if isinstance(s, dict)]
-        listed = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
-        raise FetchError(f"{loc.name} isn't in Nutrislice's list of SBU locations right now. "
-                         f"It lists {len(names)} locations: {listed or 'none'}.")
+        # Over a break Nutrislice drops closed places from its list. Saying what is open also shows
+        # it if a place was renamed instead.
+        names = [str(s.get("name") or s.get("slug")) for s in schools
+                 if isinstance(s, dict) and s.get("active_menu_types")]
+        listed = ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
+        raise NotPosted(f"{loc.name} isn't on Nutrislice right now: probably closed (a break or holiday). "
+                        + (f"Open on Nutrislice now: {listed}." if names else "Nothing is open on Nutrislice now."))
     stations = []
     for school in mine:
         for mt in school.get("active_menu_types") or []:

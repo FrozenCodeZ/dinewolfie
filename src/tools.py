@@ -876,6 +876,8 @@ def scout_meal(meal: str, date: str | None = None, per_hall: int = SCOUT_PER_HAL
             parts.append(f"{h} nothing fits your diet/allergies")
         elif info["status"] == "error":
             parts.append(f"{h} couldn't load ({_short(info.get('error'))})")
+        elif info.get("error"):  # no menu posted, and why ("probably closed")
+            parts.append(f"{h} has no menu posted ({_short(info['error'])})")
         else:
             parts.append(f"{h} {info['status'].replace('_', ' ')}")
     return {"status": status, "meal": meal, "date": day.isoformat(), "halls": halls,
