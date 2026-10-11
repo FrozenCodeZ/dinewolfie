@@ -51,7 +51,7 @@ def main() -> int:
         if args.dry_run:
             print(f"{title}\n{body}")
         else:
-            notify.send(title, body)
+            notify.send_plan(run.plan)
             SENT_MARKER.write_text(today)
             print(f"Sent: {title}\n{body}")
         return 0

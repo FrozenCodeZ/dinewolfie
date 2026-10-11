@@ -47,23 +47,59 @@ def test_no_cache_and_no_network_raises(tmp_path, monkeypatch):
 
 
 PLAN = {
-    "date": "2026-10-01", "headline": "h", "protein_gap_g": 12, "protein_goal_g": 120,
+    "date": "2026-10-01", "headline": "Vegetarian day near West", "protein_gap_g": 12, "protein_goal_g": 120,
     "totals": {"protein_g": 108, "calories": 2100, "carbs_g": 200, "fat_g": 70},
     "meals": [
-        {"meal": "breakfast", "hall": "West",
-         "items": [{"name": "Greek Yogurt"}, {"name": "Egg Whites"}, {"name": "Oatmeal"}]},
-        {"meal": "dinner", "hall": "East", "items": [{"name": "Tofu Bowl"}]},
+        {"meal": "breakfast", "hall": "West", "totals": {"protein_g": 41, "calories": 390},
+         "items": [{"name": "Greek Yogurt", "servings": 2}, {"name": "Egg Whites"},
+                   {"name": "Oatmeal", "favorite": True}],
+         "alternatives": [{"hall": "East", "items": [{"name": "Tofu Scramble"}], "note": "x"}]},
+        {"meal": "dinner", "hall": "East", "totals": {"protein_g": 67, "calories": 1710},
+         "items": [{"name": "Tofu Bowl"}, {"name": "Brownie", "treat": True}]},
     ],
     "adaptations": ["West had no dinner posted, so dinner is at East."], "tips": ["Add a yogurt."],
+    "message": "Have a great day!",
 }
 
 
-def test_notification_is_short_and_complete():
+def test_notification_is_organized_and_complete():
     title, body = notify.plan_message(PLAN)
-    assert "Thu Oct 1" in title
+    assert title == "Thu, Oct 1 · 108 g protein · 2,100 kcal"  # the lock screen shows the day at a glance
     lines = body.splitlines()
-    assert lines[0] == "🥣 Breakfast @ West: Greek Yogurt + Egg Whites +1"
-    assert "12 g short" in body and "🔄" in body
+    assert lines[:2] == ["Vegetarian day near West", "📍 West → East"]
+    assert "🥣 BREAKFAST · West · 41 g · 390 kcal" in lines
+    assert "• 2× Greek Yogurt" in lines and "• Oatmeal ♥" in lines and "• Brownie 🍪" in lines
+    assert "↪ Or swap at East: Tofu Scramble" in lines
+    assert "🎯 Protein 108 / 120 g  (12 g short)" in lines and "🟨" * 9 + "⬜" in lines
+    assert "🔄 West had no dinner posted, so dinner is at East." in lines and "💡 Add a yogurt." in lines
+    assert lines[-1] == "💬 Have a great day!"
+    assert "**" not in body and "#" not in body  # the iPhone app shows Markdown as raw symbols
+
+
+def test_notification_handles_a_single_meal_without_goal():
+    plan = {**PLAN, "protein_goal_g": None, "protein_gap_g": None, "meals": PLAN["meals"][1:], "message": "",
+            "headline": "", "adaptations": [], "tips": []}
+    _, body = notify.plan_message(plan)
+    assert body.splitlines()[0] == "📍 East" and "🎯 Protein 108 g" in body
+    assert "🟩" not in body and "🟨" not in body  # no goal, no bar
+
+
+def test_send_plan_publishes_json_that_opens_the_app(monkeypatch):
+    sent = []
+
+    class Ok:
+        def raise_for_status(self):
+            pass
+    monkeypatch.setattr(notify.requests, "post", lambda url, **kw: sent.append((url, kw)) or Ok())
+    monkeypatch.setattr(config, "APP_URL", "https://example.test/")
+    notify.send_plan({**PLAN, "cheat_day": True}, topic="dw-test")
+    url, kw = sent[0]
+    body = kw["json"]
+    assert url == config.NTFY_SERVER and body["topic"] == "dw-test"
+    assert body["title"].startswith("Thu, Oct 1") and body["message"].startswith("Vegetarian day")
+    assert body["tags"] == ["wolf", "tada"] and body["priority"] == 3
+    assert body["click"] == "https://example.test/"
+    assert body["actions"] == [{"action": "view", "label": "Open DineWolfie", "url": "https://example.test/"}]
 
 
 def test_notify_without_topic_explains_the_fix(monkeypatch):

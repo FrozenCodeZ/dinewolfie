@@ -791,6 +791,7 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
         "items_missing_nutrition": totals["items_missing_nutrition"],
         "protein_goal_g": goal,
         "protein_gap_g": max(0, round(goal - totals["totals"]["protein_g"])) if goal else None,
+        "calorie_goal": prefs.get("daily_calorie_goal") if full_day else None,
         "full_day": full_day,
         "adaptations": plan.get("adaptations", []),
         "tips": plan.get("tips", []),

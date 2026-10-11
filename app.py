@@ -124,6 +124,19 @@ h1, h2, h3, .dw-word { font-family: 'Bricolage Grotesque', sans-serif; letter-sp
   text-align: center; }
 .st-key-reply { background: var(--paper); border-radius: 14px; padding: .8rem 1rem .2rem;
   margin-top: 12px; border-left: 4px solid var(--red); }
+/* notification preview: looks like the phone banner */
+.ntfy { background: rgba(246,247,249,.97); border-radius: 22px; padding: .75rem .95rem .9rem; max-width: 380px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; color: #111;
+  box-shadow: 0 1px 0 rgba(31,36,48,.06), 0 14px 28px -18px rgba(31,36,48,.55); border: 1px solid #E3E7EC; }
+.ntfy-app { display: flex; align-items: center; gap: .45rem; font-size: .72rem; color: #6B7280;
+  text-transform: uppercase; letter-spacing: .04em; margin-bottom: .35rem; }
+.ntfy-app i { font-style: normal; width: 20px; height: 20px; border-radius: 5px; background: #317F6F; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; font-size: .7rem; }
+.ntfy-app span { margin-left: auto; text-transform: none; letter-spacing: 0; }
+.ntfy-title { font-weight: 700; font-size: .95rem; line-height: 1.25; }
+.ntfy-body { font-size: .9rem; line-height: 1.35; margin-top: .15rem; }
+.ntfy-btn { margin-top: .6rem; text-align: center; font-weight: 600; font-size: .85rem; color: #0A64D8;
+  border-top: 1px solid #E3E7EC; padding-top: .5rem; }
 @media (prefers-reduced-motion: no-preference) {
   .tk-new { animation: drop .35s ease-out; }
   @keyframes drop { from { transform: translateY(-6px); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -787,8 +800,12 @@ with tab_plan:
                         st.error(f"Couldn't send: {exc}")
             with c2.popover("Preview the notification", width="stretch"):
                 title, body = notify.plan_message(st.session_state.plan)
-                st.markdown(f"**{title}**")
-                st.text(body)
+                tag = "🐺 🎉 " if st.session_state.plan.get("cheat_day") else "🐺 "  # ntfy shows tags as emoji
+                st.markdown(f'<div class="ntfy"><div class="ntfy-app"><i>n</i>ntfy<span>now</span></div>'
+                            f'<div class="ntfy-title">{e(tag + title)}</div>'
+                            f'<div class="ntfy-body">{e(body).replace(chr(10), "<br>")}</div>'
+                            f'<div class="ntfy-btn">Open {config.APP_NAME}</div></div>', unsafe_allow_html=True)
+                st.caption("Tapping the notification opens DineWolfie.")
             if HOSTED:
                 st.text_input("Your ntfy topic", key="ntfy_topic", type="password",
                               help="Kept only in this tab. Subscribe to the same topic in the ntfy phone app.")

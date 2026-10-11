@@ -148,7 +148,7 @@ python -m pytest
 
 1. Install **ntfy** on your iPhone (App Store) and tap **+** to subscribe to a topic. Make the name long and random, like `dinewolfie-7f3k9q2m`. Anyone who knows it can read your messages.
 2. Put the same name in `.env`: `NTFY_TOPIC=dinewolfie-7f3k9q2m`
-3. Send a test: `python -m src.notify`
+3. Send a test: `python -m src.notify`. A plan arrives with the day's totals in the title, then each meal (hall, items, protein and calories, a swap) and a protein bar. Tapping it opens DineWolfie (set `DINEWOLFIE_APP_URL` if you host your own copy).
 4. Try the morning run without sending: `python -m src.morning_run --dry-run`
 5. Schedule it for 8:00 every day:
 

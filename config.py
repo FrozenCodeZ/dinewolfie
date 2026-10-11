@@ -154,3 +154,5 @@ GROQ_REASONING_EFFORT = os.getenv("DINEWOLFIE_GROQ_REASONING", "low").strip().lo
 # --- Notifications -------------------------------------------------------------
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "").strip()
+# Tapping a notification opens this page.
+APP_URL = os.getenv("DINEWOLFIE_APP_URL", "https://dinewolfie-gjdqzr6jrenmh73mpehbk6.streamlit.app/").strip()
