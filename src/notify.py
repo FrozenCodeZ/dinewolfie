@@ -9,10 +9,15 @@ The message is plain text laid out with emoji and bullets, because the iPhone ap
 Markdown as raw symbols. The lock screen shows the title and the first lines, so those
 carry the day at a glance: totals in the title, then the headline and which hall when.
 Tapping the notification opens DineWolfie.
+
+A push can also be queued: ntfy holds it and delivers it at a set time, up to 3 days ahead
+(src/push_queue.py). Each queued day has a fixed id, so sending it again replaces it.
 """
 from __future__ import annotations
 
-from datetime import date
+import re
+from datetime import date, datetime
+from urllib.parse import quote
 
 import requests
 
@@ -105,9 +110,27 @@ def plan_message(plan: dict) -> tuple[str, str]:
     return title, "\n".join(lines)
 
 
+def queued_id(day: date | str) -> str:
+    """The id of a day's queued push: sending with it again replaces that push instead of adding one."""
+    return f"dinewolfie-{day if isinstance(day, str) else day.isoformat()}"
+
+
+def check_topic(topic: str | None) -> str:
+    """ntfy topic names are 1-64 letters, numbers, - or _. Checked before a name goes into a URL."""
+    topic = (topic or "").strip()
+    if not topic:
+        raise ValueError("Add your ntfy topic first (NTFY_TOPIC in .env, or the topic box on the website). "
+                         "An ntfy topic is 1 to 64 letters, numbers, - or _.")
+    if not re.fullmatch(r"[-_A-Za-z0-9]{1,64}", topic):
+        raise ValueError("An ntfy topic is 1 to 64 letters, numbers, - or _ (no spaces). Check the topic name.")
+    return topic
+
+
 def send(title: str, body: str, tags: str | list[str] = "wolf", priority: str = "default",
-         topic: str | None = None, click: str | None = None, open_label: str | None = None) -> None:
-    """Publish one notification (ntfy's JSON API, so emoji in the title arrive intact)."""
+         topic: str | None = None, click: str | None = None, open_label: str | None = None,
+         at: datetime | None = None, sequence_id: str | None = None) -> dict:
+    """Publish one notification (ntfy's JSON API, so emoji in the title arrive intact). With `at`,
+    ntfy delivers it then instead of now. Returns ntfy's answer (the message as it stored it)."""
     topic = topic or config.NTFY_TOPIC
     if not topic:
         raise RuntimeError("NTFY_TOPIC isn't set. Add it to your .env file (see README > Phone notifications).")
@@ -118,15 +141,33 @@ def send(title: str, body: str, tags: str | list[str] = "wolf", priority: str = 
         payload["click"] = click  # tapping the notification opens this
         if open_label:
             payload["actions"] = [{"action": "view", "label": open_label, "url": click}]
+    if at is not None:
+        payload["delay"] = str(int(at.timestamp()))  # a Unix time: the same instant in every time zone
+    if sequence_id:
+        payload["sequence_id"] = sequence_id
     resp = requests.post(config.NTFY_SERVER, json=payload, timeout=15)
     resp.raise_for_status()
+    try:
+        return resp.json()
+    except (AttributeError, ValueError):
+        return {}
 
 
-def send_plan(plan: dict, topic: str | None = None) -> str:
+def send_plan(plan: dict, topic: str | None = None, at: datetime | None = None, note: str = "") -> dict:
+    """Send a plan now, or queue it for `at` (then under the day's fixed id). Returns ntfy's answer."""
     title, body = plan_message(plan)
+    if note:
+        body += f"\n\n🕒 {note}"
     tags = ["wolf"] + (["tada"] if plan.get("cheat_day") else [])
-    send(title, body, tags=tags, topic=topic, click=config.APP_URL or None, open_label=f"Open {config.APP_NAME}")
-    return body
+    return send(title, body, tags=tags, topic=topic, click=config.APP_URL or None,
+                open_label=f"Open {config.APP_NAME}", at=at, sequence_id=queued_id(plan["date"]) if at else None)
+
+
+def cancel_queued(day: date, topic: str | None = None) -> None:
+    """Delete a day's queued push before it's delivered (nothing happens if there is none)."""
+    topic = check_topic(topic or config.NTFY_TOPIC)
+    resp = requests.delete(f"{config.NTFY_SERVER}/{quote(topic)}/{queued_id(day)}", timeout=15)
+    resp.raise_for_status()
 
 
 def send_failure(reason: str, topic: str | None = None) -> None:

@@ -207,3 +207,12 @@ def test_scout_says_why_a_hall_could_not_load(nutrislice, prefs, monkeypatch):
     scout = T.scout_meal("lunch", DAY.isoformat())
     assert scout["halls"]["West"]["status"] == "error"
     assert "West couldn't load (West Side Dine-In isn't in Nutrislice's list" in scout["summary"]
+
+
+def test_a_missing_hall_error_names_what_nutrislice_does_list(nutrislice, monkeypatch):
+    """So a screenshot of the trace shows whether West was renamed, hidden or the list came back short."""
+    monkeypatch.setattr(sys.modules[__name__], "SCHOOLS", [s for s in SCHOOLS if s["id"] != 6334])
+    with pytest.raises(fetch_menu.FetchError) as err:
+        fetch_menu.list_stations("West")
+    assert "It lists 5 locations: East Side Dine-In, Smash n' Shake, Fuze at Roth, Starbucks at the Library" \
+        in str(err.value)

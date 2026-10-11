@@ -159,6 +159,8 @@ Start-ScheduledTask -TaskName "DineWolfie Morning Plan"    # test it now
 
 The PC has to be on (or asleep with wake timers allowed) at that time; if it was off, the task runs as soon as it's back. Each run logs every agent step to `data/logs/`. Remove the task with `scripts\uninstall_morning_task.ps1`.
 
+**No computer needed: queue them from the website.** Under a plan, open **Get the next 3 mornings on your phone**, pick a time and press **Queue the next 3 days**. DineWolfie plans each of the next three mornings right away (from your saved memory and the menus posted now) and ntfy delivers each one at that time, even with the site closed. ntfy holds a push for at most 3 days, so come back to queue more. Each day's push has a fixed id (`dinewolfie-YYYY-MM-DD`): pressing the button again replaces the queued pushes, and **Cancel queued plans** deletes them. If you change your memory (a new allergy, say), queue again so the queued plans follow it.
+
 ## How it works
 
 ```

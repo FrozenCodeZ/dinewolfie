@@ -8,12 +8,12 @@ from __future__ import annotations
 import html
 import json
 import os
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 import streamlit as st
 
 import config
-from src import access, accounts, locations, notify, storage
+from src import access, accounts, locations, notify, push_queue, storage
 from src import tools as T
 from src.agent import MEAL_NAMES, Engine, default_goal, run_agent
 from src.groq_agent import PROVIDERS, lightest_first, model_settings
@@ -765,6 +765,64 @@ def remember(key: str, value: str, done: str) -> None:
         st.error(f"Couldn't save that: {result['error']}")
 
 
+def day_label(day: date) -> str:
+    return f"{day:%a}, {day:%b} {day.day}"
+
+
+def queue_section(topic: str | None) -> None:
+    """Line up the next mornings' plans on ntfy, so they arrive with the site closed (src/push_queue.py)."""
+    queued = st.session_state.get("queued")
+    with st.expander("📅 Get the next 3 mornings on your phone", expanded=bool(queued)):
+        st.caption("DineWolfie plans each of the next 3 mornings now and asks ntfy to deliver each plan at the "
+                   "time you pick, so it arrives even with this site closed. Plans use your saved memory and the "
+                   "menus posted right now. ntfy holds a push for at most 3 days, so come back to queue more.")
+        at = st.columns([1, 2])[0].time_input("Arrive at", value=time(7, 30), step=900, key="queue_at",
+                                                help="Stony Brook (New York) time.")
+        q2, q3 = st.columns(2)
+        if q2.button("Queue the next 3 days", type="primary", width="stretch"):
+            if HOSTED and not topic:
+                st.info("Add your ntfy topic below first (install the ntfy app and subscribe to a long, "
+                        "random topic name).")
+            elif not ENGINE_READY:
+                st.warning(access.explain(why, ENGINE.provider) + " (sidebar > AI engine)")
+            else:
+                try:
+                    with st.status("Planning the next mornings…") as status:
+                        items = push_queue.queue_days(
+                            at, topic, ENGINE, on_day=lambda d: status.update(label=f"Planning {day_label(d)}…"))
+                        status.update(label="Planned", state="complete")
+                    queued = {"items": items, "prefs": T.read_prefs(), "at": push_queue.time_label(at)}
+                    st.session_state.queued = queued
+                except (ValueError, RuntimeError) as exc:  # a bad topic name, or no topic set (local)
+                    st.error(str(exc))
+        if q3.button("Cancel queued plans", width="stretch"):
+            if HOSTED and not topic:
+                st.info("Add your ntfy topic below first.")
+            else:
+                try:
+                    push_queue.cancel_days(topic)
+                    st.session_state.pop("queued", None)
+                    queued = None
+                    st.toast("Cancelled the queued plans")
+                except Exception as exc:
+                    st.error(f"Couldn't cancel: {exc}")
+        if not queued:
+            return
+        done = [q for q in queued["items"] if q.title]
+        if done:
+            st.success(f"Queued for {' · '.join(day_label(q.day) for q in done)} at {queued['at']}. "
+                       f"Come back by {done[-1].day:%A} to queue more.")
+        for q in queued["items"]:
+            if q.skipped:
+                st.caption(f"{day_label(q.day)}: not queued, {q.skipped}.")
+        if done and not all(q.replaceable for q in done):
+            st.caption("ntfy didn't confirm it can replace queued pushes, so queuing again might send doubles. "
+                       "Press Cancel first.")
+        if T.read_prefs() != queued["prefs"]:
+            st.warning("Your memory changed after you queued these plans (a new allergy, say). Queue again to "
+                       "update them: the new plans replace the queued ones.")
+
+
 def use_example() -> None:
     if st.session_state.get("example"):
         st.session_state.goal_box = EXAMPLES[st.session_state.example]
@@ -836,10 +894,10 @@ with tab_plan:
             m1.metric("Tool calls", s["tools"])
             m2.metric("Changes of course", s["adaptations"])
             m3.metric("Seconds", s["seconds"])
+        # Hosted: each visitor uses their own ntfy topic (the app's topic is the owner's phone).
+        topic = (st.session_state.get("ntfy_topic") or "").strip() if HOSTED else None
         if st.session_state.plan:
             c1, c2 = st.columns([1, 2])
-            # Hosted: each visitor uses their own ntfy topic (the app's topic is the owner's phone).
-            topic = (st.session_state.get("ntfy_topic") or "").strip() if HOSTED else None
             if c1.button("Send to my phone", width="stretch"):
                 if HOSTED and not topic:
                     st.info("Add your ntfy topic below first (install the ntfy app and subscribe to a long, "
@@ -858,9 +916,11 @@ with tab_plan:
                             f'<div class="ntfy-body">{e(body).replace(chr(10), "<br>")}</div>'
                             f'<div class="ntfy-btn">Open {config.APP_NAME}</div></div>', unsafe_allow_html=True)
                 st.caption("Tapping the notification opens DineWolfie.")
-            if HOSTED:
-                st.text_input("Your ntfy topic", key="ntfy_topic", type="password",
-                              help="Kept only in this tab. Subscribe to the same topic in the ntfy phone app.")
+        queue_section(topic)
+        if HOSTED:
+            st.text_input("Your ntfy topic", key="ntfy_topic", type="password",
+                          help="Kept only in this tab. Subscribe to the same topic in the ntfy phone app.")
+        if st.session_state.plan:
             with st.expander("Teach DineWolfie: love it or never again"):
                 st.caption("Saved to memory. Favorites get picked first; never-again items are blocked for good.")
                 seen = set()
@@ -966,6 +1026,7 @@ more of its reasoning.
 
 **The code calculates, the model decides.** Every number on the tray comes from Python, never from the model.
 
-**It runs on its own.** Every morning, Windows Task Scheduler runs the same agent with your saved goal and
-pushes the plan to your phone with ntfy.
+**It runs on its own.** Under the plan, **Get the next 3 mornings on your phone** plans each of the next three
+days now and asks ntfy to deliver each plan at the time you pick, so it arrives with this site closed (ntfy holds a
+push for up to 3 days). On your own computer, Windows Task Scheduler can also run the same agent every morning.
 """)

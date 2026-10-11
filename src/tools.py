@@ -959,6 +959,21 @@ def _servings(value) -> float | None:
         return None
 
 
+MEAL_SHAPE = '{"meal": "lunch", "hall": "East", "items": [{"id": "E123", "servings": 1}], "reason": "..."}'
+SWAP_SHAPE = '{"hall": "East", "items": [{"id": "E123"}], "note": "..."}'
+
+
+def _listed(value) -> list:
+    """What a model sent as a list: a list as is, a single object (or id) as a list of one, nothing as []."""
+    if value is None or value == "":
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def _texts(value) -> list[str]:
+    return [str(v).strip() for v in _listed(value) if str(v).strip()]
+
+
 def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
     """Check a proposed plan against the real menu and the user's constraints."""
     problems = []
@@ -973,7 +988,7 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
     def check_items(entries: list, hall: str, meal: str, on_menu: dict, label: str) -> list[dict]:
         """Validate one list of {id, servings, treat} against the menu and the user's hard rules."""
         out = []
-        for entry in entries or []:
+        for entry in _listed(entries):
             entry = entry if isinstance(entry, dict) else {"id": entry}
             item_id = str(entry.get("id", "")).upper()
             servings = _servings(entry.get("servings"))
@@ -1003,7 +1018,10 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
                 row["favorite"] = True
             out.append(row)
         return out
-    for meal_plan in plan.get("meals", []):
+    for n, meal_plan in enumerate(_listed(plan.get("meals")), 1):
+        if not isinstance(meal_plan, dict) or "meal" not in meal_plan:
+            problems.append(f"Meal {n} must be an object like {MEAL_SHAPE}, not {repr(meal_plan)[:60]}.")
+            continue
         try:
             meal = normalize_meal(meal_plan.get("meal", ""))
             hall = normalize_hall(meal_plan.get("hall", ""))
@@ -1018,7 +1036,10 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
         all_entries.extend({"id": i["id"], "servings": i["servings"]} for i in items_out)
 
         alternatives = []
-        for n, alt in enumerate(meal_plan.get("alternatives") or [], 1):
+        for n, alt in enumerate(_listed(meal_plan.get("alternatives")), 1):
+            if not isinstance(alt, dict):
+                problems.append(f"{meal} swap {n} must be an object like {SWAP_SHAPE}, not {repr(alt)[:60]}.")
+                continue
             try:
                 alt_hall = normalize_hall(alt.get("hall") or hall)
             except ValueError as exc:
@@ -1053,8 +1074,8 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
         "protein_gap_g": max(0, round(goal - totals["totals"]["protein_g"])) if goal else None,
         "calorie_goal": prefs.get("daily_calorie_goal") if full_day else None,
         "full_day": full_day,
-        "adaptations": plan.get("adaptations", []),
-        "tips": plan.get("tips", []),
+        "adaptations": _texts(plan.get("adaptations")),
+        "tips": _texts(plan.get("tips")),
         "cheat_day": is_cheat_day(day, prefs),
         "created_at": config.now().isoformat(timespec="seconds"),
     }
@@ -1088,7 +1109,9 @@ def read_history() -> list[dict]:
 
 
 def append_history(plan: dict) -> None:
-    history = read_history()
+    """Remember an accepted plan, one per date: a newer plan for the same day (queued again, or
+    changed with a follow-up) replaces the older one."""
+    history = [h for h in read_history() if not isinstance(h, dict) or h.get("date") != plan["date"]]
     history.append({"date": plan["date"], "goal": plan.get("goal", ""), "plan": plan})
     storage.current().save_history(history)
 

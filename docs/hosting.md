@@ -153,4 +153,4 @@ A full template of every setting is in [`.streamlit/secrets.toml.example`](../.s
 - **Live menus:** the first visitor of the day would wait for about 35 Nutrislice requests, so the app starts loading today's East and West menus in the background as soon as it starts. Streamlit Cloud forgets the cache when the app restarts, so the first plan after a restart can take longer.
 - **Model choice on the hosted site:** visitors using your key always get the default model (so nobody can run up your bill with a bigger one). Visitors who paste their own key can pick any model in the list.
 - **Phone notifications:** the hosted site never uses your `NTFY_TOPIC`. Each visitor types their own topic.
-- **The 8 AM morning run** still runs on your own computer (Task Scheduler), not on Streamlit Cloud.
+- **Morning plans without a computer:** Streamlit Cloud can't wake itself up, so the site queues them on ntfy instead: **Get the next 3 mornings on your phone** plans the next three days and ntfy delivers each at the chosen time (up to 3 days ahead). The Windows morning run (Task Scheduler) still works on your own computer.
