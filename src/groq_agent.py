@@ -113,6 +113,11 @@ KEEP_FULL_ROUNDS = 2          # the last N tool results stay in full; older ones
 MAX_RESULT_CHARS = 6_000
 MAX_BAD_TOOL_RETRIES = 2
 MAX_RATE_WAITS = 6
+# Gemini 3 signs each tool call it makes ("thought signature", in the call's extra_content) and
+# rejects a conversation whose earlier calls come back unsigned. A signature only fits the model
+# that made it, so calls from another model (after a switch, or old history) get Google's
+# placeholder signature instead.
+PLACEHOLDER_SIGNATURE = "skip_thought_signature_validator"
 MAX_WAIT_S = 60
 MAX_COMPLETION_TOKENS = 2048  # a whole fast-mode plan is ~1,000; a smaller cap may also count less against the limit
 SHORT_WAIT_S = 8              # wait this long at most for a model to free up before giving up on the AI
@@ -287,9 +292,36 @@ def _retry_after(exc) -> float | None:
         return 10.0
 
 
-def _wire(messages: list[dict]) -> list[dict]:
-    """Messages as Groq expects them (without our private bookkeeping keys)."""
-    return [{k: v for k, v in m.items() if not k.startswith("_")} for m in messages]
+def _wire(messages: list[dict], provider: str | None = None, model: str | None = None,
+          resign_all: bool = False) -> list[dict]:
+    """Messages as the service expects them (without our private bookkeeping keys).
+
+    For Gemini, tool calls made by a different model (or of unknown origin) carry the placeholder
+    signature, since their own signatures would be rejected."""
+    out = []
+    for m in messages:
+        clean = {k: v for k, v in m.items() if not k.startswith("_")}
+        if provider == "gemini" and clean.get("tool_calls") and (resign_all or m.get("_model") != model):
+            placeholder = {"google": {"thought_signature": PLACEHOLDER_SIGNATURE}}
+            clean["tool_calls"] = [{**call, "extra_content": placeholder} if i == 0 or "extra_content" in call
+                                   else call for i, call in enumerate(clean["tool_calls"])]
+        out.append(clean)
+    return out
+
+
+def _tool_call_out(tc) -> dict:
+    """A tool call as we send it back next turn, keeping Gemini's thought signature (extra_content)."""
+    out = {"id": tc.id, "type": "function",
+           "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"}}
+    extra = getattr(tc, "extra_content", None) or (getattr(tc, "model_extra", None) or {}).get("extra_content")
+    if extra:
+        out["extra_content"] = extra
+    return out
+
+
+def _bad_signature(exc) -> bool:
+    text = str(exc).lower()
+    return getattr(exc, "status_code", None) == 400 and ("thought_signature" in text or "thought signature" in text)
 
 
 def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine, client=None,
@@ -319,7 +351,7 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
         messages = [{"role": "system", "content": A.system_prompt(plan_date, fast) + ("" if fast else GROQ_NOTE)},
                     {"role": "user", "content": first}]
 
-    nudged, bad_tool_retries, waits, waited = False, 0, 0, 0.0
+    nudged, bad_tool_retries, waits, waited, resign_all = False, 0, 0, 0.0, False
     turns, model = 0, primary
     while turns < config.MAX_TURNS:
         shrink_history(messages)
@@ -336,7 +368,8 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
             sleep(free_in)
             continue
         try:
-            resp = client.chat.completions.create(model=model, messages=_wire(messages), tools=tools,
+            resp = client.chat.completions.create(model=model, tools=tools,
+                                                  messages=_wire(messages, provider, model, resign_all),
                                                   tool_choice="auto", temperature=0.3,
                                                   **{info.token_param: MAX_COMPLETION_TOKENS},
                                                   **model_options(model, provider))
@@ -360,6 +393,9 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
                 with _models_lock:  # this model doesn't take the setting: ask again without it
                     _no_reasoning.add(f"{provider}:{model}")
                 continue
+            if _bad_signature(exc) and not resign_all:
+                resign_all = True  # Gemini didn't accept a signature: send every call with the placeholder
+                continue
             # A reply whose tool call the service couldn't parse; asking again usually works.
             if "tool_use_failed" in str(exc) and bad_tool_retries < MAX_BAD_TOOL_RETRIES:
                 bad_tool_retries += 1
@@ -368,12 +404,10 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
         turns += 1
         run.num_turns += 1
         msg = resp.choices[0].message
-        assistant = {"role": "assistant", "content": msg.content or ("" if not msg.tool_calls else None)}
+        assistant = {"role": "assistant", "content": msg.content or ("" if not msg.tool_calls else None),
+                     "_model": model}
         if msg.tool_calls:
-            assistant["tool_calls"] = [{"id": tc.id, "type": "function",
-                                        "function": {"name": tc.function.name,
-                                                     "arguments": tc.function.arguments or "{}"}}
-                                       for tc in msg.tool_calls]
+            assistant["tool_calls"] = [_tool_call_out(tc) for tc in msg.tool_calls]
         messages.append(assistant)
         reasoning = (getattr(msg, "reasoning", None) or "").strip()
         if reasoning:
@@ -400,4 +434,4 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
             break
     else:
         run.error = "The agent ran out of steps before finishing."
-    run.messages = _wire(messages)
+    run.messages = messages  # private keys (_model, _shrunk) are dropped when sent

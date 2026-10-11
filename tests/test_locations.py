@@ -4,7 +4,8 @@ The fake server below answers like Nutrislice: a schools list with East, West, t
 concepts listed as their own locations (as SBU's site describes them), a Starbucks elsewhere, and
 a closed location. Every station's week is built from real West grill rows."""
 import json
-from datetime import date
+import sys
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -157,3 +158,52 @@ def test_the_briefing_scouts_places_the_goal_names(nutrislice, prefs):
         A._current.reset(token)
     assert "LUNCH at Roth Cafe" in text and "dining dollars" in text
     assert "LUNCH at Smash n' Shake" not in text  # scouted once, as the group
+
+
+def _schools_with(west: dict):
+    return [s for s in SCHOOLS if s["id"] != 6334] + [west]
+
+
+def test_west_is_found_even_if_nutrislice_renumbers_it(nutrislice, prefs, monkeypatch):
+    prefs()
+    moved = {"id": 7001, "name": "West Side Dine-In", "slug": "west-side-dining",
+             "active_menu_types": [{"id": 2, "slug": "dine-in-grill", "name": "Grill"}]}
+    monkeypatch.setattr(sys.modules[__name__], "SCHOOLS", _schools_with(moved))
+    menu = T.get_menu("West", "lunch", DAY.isoformat())
+    assert menu["status"] == "ok"
+    assert any("/weeks/school/7001/" in url for url in nutrislice)
+    assert "West Side Dine-In" not in {loc.key for loc in locations.all_locations()}  # not listed twice
+
+
+def test_a_hall_with_nothing_posted_is_no_menu_not_an_error(nutrislice, prefs, monkeypatch):
+    prefs()
+    closed = {"id": 6334, "name": "West Side Dine-In", "slug": "west-side-dining", "active_menu_types": []}
+    monkeypatch.setattr(sys.modules[__name__], "SCHOOLS", _schools_with(closed))
+    menu = T.get_menu("West", "lunch", DAY.isoformat())
+    assert menu["status"] == "no_menu_posted" and "may be closed" in menu["summary"]
+    scout = T.scout_meal("lunch", DAY.isoformat())
+    assert scout["halls"]["West"]["status"] == "no_menu_posted" and "West no menu posted" in scout["summary"]
+    assert scout["halls"]["East"]["status"] == "ok"
+    # The list was fetched just now, so it isn't asked for again.
+    assert sum(url == config.SCHOOLS_URL for url in nutrislice) == 1
+
+
+def test_an_old_location_list_is_rechecked_once_when_a_hall_looks_empty(nutrislice, prefs, monkeypatch):
+    prefs()
+    closed = {"id": 6334, "name": "West Side Dine-In", "slug": "west-side-dining", "active_menu_types": []}
+    two_hours_ago = (datetime.now() - timedelta(hours=2)).isoformat(timespec="seconds")
+    old = {"fetched_at": two_hours_ago, "url": config.SCHOOLS_URL, "data": _schools_with(closed)}
+    path = config.CACHE_DIR / "schools.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(old), encoding="utf-8")
+    menu = T.get_menu("West", "lunch", DAY.isoformat())  # the fresh list (SCHOOLS) has West's menus again
+    assert menu["status"] == "ok"
+    assert sum(url == config.SCHOOLS_URL for url in nutrislice) == 1
+
+
+def test_scout_says_why_a_hall_could_not_load(nutrislice, prefs, monkeypatch):
+    prefs()
+    monkeypatch.setattr(sys.modules[__name__], "SCHOOLS", [s for s in SCHOOLS if s["id"] != 6334])
+    scout = T.scout_meal("lunch", DAY.isoformat())
+    assert scout["halls"]["West"]["status"] == "error"
+    assert "West couldn't load (West Side Dine-In isn't in Nutrislice's list" in scout["summary"]

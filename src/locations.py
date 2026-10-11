@@ -52,6 +52,16 @@ def builtin() -> list[Location]:
     return [Location(key, h["school_id"], h["slug"], h["name"], key[0], DINE_IN) for key, h in config.HALLS.items()]
 
 
+def hall_for_school(school: dict) -> str | None:
+    """"East"/"West" if this Nutrislice location is one of the two halls: by id, or by slug or name
+    in case Nutrislice ever renumbers them."""
+    name, slug = (school.get("name") or "").strip().lower(), (school.get("slug") or "").strip().lower()
+    for key, hall in config.HALLS.items():
+        if school.get("id") == hall["school_id"] or slug == hall["slug"] or name == hall["name"].lower():
+            return key
+    return None
+
+
 def is_roth(name: str, slug: str = "") -> bool:
     text = f"{name} {slug}".lower().replace("é", "e")
     return any(word in text for word in config.ROTH_WORDS)
@@ -64,7 +74,8 @@ def from_schools(schools: list[dict]) -> list[Location]:
     roth = []
     for school in schools or []:
         sid, name = school.get("id"), (school.get("name") or "").strip()
-        if not isinstance(sid, int) or sid in known or not name or not school.get("active_menu_types"):
+        if not isinstance(sid, int) or sid in known or not name or not school.get("active_menu_types") \
+                or hall_for_school(school):
             continue
         slug = school.get("slug") or re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
         kind = DINE_IN if "dine-in" in slug or "dine in" in name.lower() else RETAIL

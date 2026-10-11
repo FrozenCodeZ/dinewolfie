@@ -21,7 +21,7 @@ import requests
 
 import config
 from src import locations, storage
-from src.fetch_menu import FetchError, fetch_hall_day
+from src.fetch_menu import FetchError, NotPosted, fetch_hall_day
 from src.parse_menu import parse_hall_day
 
 HALLS = list(config.HALLS)  # East and West: always considered. Other places only when asked for.
@@ -141,6 +141,8 @@ def _menu(hall: str, meal: str, day: date) -> tuple[list[dict], dict]:
         return [], {"status": "no_menu_posted", "source": "nutrislice", "errors": []}
     try:
         items, meta = load_items(hall, day)
+    except NotPosted as exc:
+        return [], {"status": "no_menu_posted", "note": str(exc), "errors": []}
     except FetchError as exc:
         return [], {"status": "error", "error": str(exc)}
     wanted = set(config.MEAL_ALIASES.get(meal, [meal]))
@@ -369,10 +371,30 @@ def get_prefs() -> dict:
 
 
 EDITABLE_PREFS = set(DEFAULT_PREFS)
+# Names models often use for a memory key, and the key they mean.
+PREF_ALIASES = {"protein_goal_g": "daily_protein_goal_g", "protein_goal": "daily_protein_goal_g",
+                "daily_protein_goal": "daily_protein_goal_g", "calorie_goal": "daily_calorie_goal",
+                "calories_goal": "daily_calorie_goal", "daily_calories": "daily_calorie_goal",
+                "allergy": "allergies", "blacklist": "never_eat", "favorite_foods": "favorites"}
+NUMBER_PREFS = {"daily_protein_goal_g", "daily_calorie_goal", "max_calories_per_meal"}
+
+
+def _clean_pref(key: str, value):
+    """A list key given as text becomes a list ("vegetarian" -> ["vegetarian"]); "110 g" becomes 110."""
+    if isinstance(DEFAULT_PREFS.get(key), list):
+        if isinstance(value, str):
+            return [v.strip() for v in value.split(",") if v.strip()]
+        return [] if value is None else value
+    if key in NUMBER_PREFS and isinstance(value, str):
+        number = re.search(r"\d+(?:\.\d+)?", value)
+        return round(float(number.group())) if number else None
+    return value
 
 
 def update_prefs(changes: dict, reason: str = "") -> dict:
     prefs = read_prefs()
+    changes = {PREF_ALIASES.get(k, k): v for k, v in (changes or {}).items()}
+    changes = {k: _clean_pref(k, v) for k, v in changes.items()}
     unknown = sorted(set(changes) - EDITABLE_PREFS)
     if unknown:
         return {"status": "error", "error": f"Unknown preference keys {unknown}. "
@@ -411,7 +433,8 @@ def get_menu(hall: str, meal: str, date: str | None = None) -> dict:
                 "error": meta["error"], "summary": f"Couldn't load {label}: {meta['error']}"}
     if meta["status"] == "no_menu_posted":
         return {"status": "no_menu_posted", "hall": hall, "meal": meal, "date": day.isoformat(),
-                "summary": f"No {meal.replace('_', ' ')} menu is posted for {hall} on {day.isoformat()}."}
+                "summary": f"No {meal.replace('_', ' ')} menu is posted for {hall} on {day.isoformat()}."
+                           + (f" {meta['note']}" if meta.get("note") else "")}
     stations: dict[str, list] = {}
     for item in items:
         stations.setdefault(item["station"], []).append(compact(item))
@@ -545,6 +568,11 @@ def compare_halls(meal: str, date: str | None = None, min_protein_g: float | Non
 SCOUT_PER_HALL = 10
 
 
+def _short(text, limit: int = 90) -> str:
+    text = " ".join(str(text or "unknown error").split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 def scout_meal(meal: str, date: str | None = None, per_hall: int = SCOUT_PER_HALL,
                places: list[str] | None = None) -> dict:
     """Fast mode: one meal's best candidates at each hall, already filtered by the user's memory.
@@ -562,7 +590,8 @@ def scout_meal(meal: str, date: str | None = None, per_hall: int = SCOUT_PER_HAL
     for h in places:
         items, meta = _menu(h, meal, day)
         if meta["status"] != "ok":
-            halls[h] = {"status": meta["status"], "fits": 0, "items": [], "error": meta.get("error")}
+            halls[h] = {"status": meta["status"], "fits": 0, "items": [],
+                        "error": meta.get("error") or meta.get("note")}
             continue
         fits = [i for i in items
                 if not _exclusion(i, codes, prefs["diet"], prefs.get("never_eat"), prefs["dislikes"])]
@@ -602,6 +631,8 @@ def scout_meal(meal: str, date: str | None = None, per_hall: int = SCOUT_PER_HAL
             parts.append(f"{h} {info['fits']} fit you (top: {best['name']}, {best['protein_g']} g)")
         elif info["status"] == "no_matches":
             parts.append(f"{h} nothing fits your diet/allergies")
+        elif info["status"] == "error":
+            parts.append(f"{h} couldn't load ({_short(info.get('error'))})")
         else:
             parts.append(f"{h} {info['status'].replace('_', ' ')}")
     return {"status": status, "meal": meal, "date": day.isoformat(), "halls": halls,

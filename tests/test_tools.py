@@ -215,3 +215,13 @@ def test_treat_flag_and_cheat_day(prefs):
     assert plan["status"] == "accepted", plan.get("problems")
     assert plan["plan"]["cheat_day"] is True
     assert plan["plan"]["meals"][0]["items"][0]["treat"] is True
+
+
+def test_update_prefs_understands_common_key_names_and_plain_values(prefs):
+    prefs()
+    res = T.update_prefs({"protein_goal_g": "110 g", "diet": "vegetarian", "never_eat": "fries, ice cream"})
+    assert res["status"] == "ok", res
+    saved = T.read_prefs()
+    assert saved["daily_protein_goal_g"] == 110
+    assert saved["diet"] == ["vegetarian"] and saved["never_eat"] == ["fries", "ice cream"]
+    assert T.update_prefs({"shoe_size": 9})["status"] == "error"

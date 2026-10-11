@@ -30,6 +30,10 @@ class FetchError(Exception):
     """Raised when a menu can't be loaded from the network or the cache."""
 
 
+class NotPosted(FetchError):
+    """The location is on Nutrislice but has no menus there right now (closed, break, not published)."""
+
+
 @dataclass
 class Station:
     hall: str          # the location's key: "East", "West", "Roth Cafe", ...
@@ -112,14 +116,24 @@ def _fresh(wrapped: dict, week_last_day: date) -> bool:
 
 # --- stations ---------------------------------------------------------------
 
-def load_schools(offline: bool = False) -> list[dict]:
-    """Nutrislice's list of every SBU location and its stations (cached on disk for a week)."""
+SCHOOLS_RECHECK_H = 1  # a hall missing from a saved list this old: ask Nutrislice again (at most hourly)
+
+
+def _age_hours(wrapped: dict) -> float:
+    return (datetime.now() - datetime.fromisoformat(wrapped["fetched_at"])).total_seconds() / 3600
+
+
+def load_schools(offline: bool = False, recheck: bool = False) -> list[dict]:
+    """Nutrislice's list of every SBU location and its stations (cached on disk for a week).
+
+    recheck=True asks Nutrislice again if the saved copy is over SCHOOLS_RECHECK_H hours old."""
     path = config.CACHE_DIR / "schools.json"
     with _fetch_lock:
         wrapped = _read_cache(path)
         # The list of locations rarely changes, so a week-old copy is fine.
         stale = wrapped is not None and (
             date.today() - datetime.fromisoformat(wrapped["fetched_at"]).date()).days >= 7
+        stale = stale or (recheck and wrapped is not None and _age_hours(wrapped) >= SCHOOLS_RECHECK_H)
         if (wrapped is None or stale) and not offline:
             try:
                 wrapped = _write_cache(path, config.SCHOOLS_URL, _get_json(config.SCHOOLS_URL))
@@ -139,11 +153,15 @@ def list_stations(hall: str, offline: bool = False) -> list[Station]:
         loc = locations.get(hall, locations.from_schools(schools))
     except ValueError as exc:
         raise FetchError(str(exc)) from exc
+    mine = _schools_of(loc, schools)
+    if not any(s.get("active_menu_types") for s in mine) and not offline:
+        schools = load_schools(offline=offline, recheck=True)  # the saved list may be out of date
+        mine = _schools_of(loc, schools)
+    if not mine:
+        raise FetchError(f"{loc.name} isn't in Nutrislice's list of SBU locations right now.")
     stations = []
-    for school in schools:
-        if school["id"] not in loc.school_ids:
-            continue
-        for mt in school.get("active_menu_types", []):
+    for school in mine:
+        for mt in school.get("active_menu_types") or []:
             if mt["slug"] in config.SKIP_MENU_TYPE_SLUGS:
                 continue
             # In a group (Roth Cafe) the concept's own name is the useful one: "Smash n' Shake".
@@ -151,8 +169,18 @@ def list_stations(hall: str, offline: bool = False) -> list[Station]:
                 school["name"] if mt["name"].lower() in school["name"].lower() else f"{school['name']}: {mt['name']}")
             stations.append(Station(loc.key, mt["id"], mt["slug"], name, school["id"]))
     if not stations:
-        raise FetchError(f"{loc.name} isn't listed on Nutrislice right now.")
+        raise NotPosted(f"{loc.name} has no menus posted on Nutrislice right now (it may be closed).")
     return stations
+
+
+def _schools_of(loc, schools: list[dict]) -> list[dict]:
+    """The Nutrislice locations behind one of ours (East/West are also matched by slug or name)."""
+    from src import locations
+    if loc.key in config.HALLS:  # one match; prefer the listed id, then one that has menus
+        hits = [s for s in schools if locations.hall_for_school(s) == loc.key]
+        hits.sort(key=lambda s: (s.get("id") != loc.school_id, not s.get("active_menu_types")))
+        return hits[:1]
+    return [s for s in schools if s.get("id") in loc.school_ids]
 
 
 # --- menus --------------------------------------------------------------------

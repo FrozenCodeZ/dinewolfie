@@ -128,3 +128,54 @@ def test_app_offers_gemini_and_cerebras_with_optional_keys(monkeypatch):
     assert at.selectbox(key="model_gemini").value == "auto"
     at.sidebar.radio(key="provider").set_value("Cerebras").run()
     assert "No Cerebras key yet" in " ".join(c.value for c in at.caption)
+
+
+def _signed_call(i, name, args, signature):
+    """A tool call exactly as the OpenAI SDK parses one from Gemini, signature included."""
+    from openai.types.chat import ChatCompletionMessageFunctionToolCall
+    return ChatCompletionMessageFunctionToolCall.model_validate(
+        {"id": f"call_{i}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)},
+         "extra_content": {"google": {"thought_signature": signature}}})
+
+
+def _assistant_calls(request):
+    return [m["tool_calls"] for m in request["messages"] if m.get("role") == "assistant" and m.get("tool_calls")]
+
+
+def test_gemini_thought_signatures_are_sent_back(prefs):
+    """Gemini 3 rejects a conversation whose earlier tool calls come back unsigned (HTTP 400)."""
+    prefs()
+    search = _signed_call(1, "search_items", {"meal": "dinner", "hall": "East", "limit": 3}, "SIG-A")
+    fake = FakeCompat([{"tool_calls": [search]}, _submit()])
+    run, _ = _run("gemini", fake, model="gemini-3.8-flash")
+    assert run.plan is not None
+    calls = _assistant_calls(fake.requests[1])[0]
+    assert calls[0]["extra_content"] == {"google": {"thought_signature": "SIG-A"}}
+    assert all(not k.startswith("_") for m in fake.requests[1]["messages"] for k in m)
+
+
+def test_gemini_calls_from_another_model_get_the_placeholder_signature():
+    calls = [{"id": "c1", "type": "function", "function": {"name": "x", "arguments": "{}"},
+              "extra_content": {"google": {"thought_signature": "SIG-A"}}},
+             {"id": "c2", "type": "function", "function": {"name": "y", "arguments": "{}"}}]
+    messages = [{"role": "assistant", "content": None, "tool_calls": calls, "_model": "gemini-a"}]
+    same = G._wire(messages, "gemini", "gemini-a")[0]["tool_calls"]
+    assert same[0]["extra_content"]["google"]["thought_signature"] == "SIG-A" and "extra_content" not in same[1]
+    other = G._wire(messages, "gemini", "gemini-b")[0]["tool_calls"]
+    assert other[0]["extra_content"]["google"]["thought_signature"] == G.PLACEHOLDER_SIGNATURE
+    assert "extra_content" not in other[1]  # only the first of parallel calls is signed
+    unsigned_history = [{"role": "assistant", "content": None, "tool_calls": calls[1:]}]  # e.g. older history
+    assert G._wire(unsigned_history, "gemini", "gemini-a")[0]["tool_calls"][0]["extra_content"]
+    assert G._wire(messages, "groq", "gemini-b")[0]["tool_calls"] == calls  # other services: untouched
+
+
+def test_a_rejected_signature_is_retried_once_with_the_placeholder(prefs):
+    prefs()
+    search = _signed_call(1, "search_items", {"meal": "dinner", "hall": "East", "limit": 3}, "SIG-A")
+    bad = type("BadRequestError", (Exception,), {"status_code": 400})(
+        "Function call is missing a thought_signature in functionCall parts.")
+    fake = FakeCompat([{"tool_calls": [search]}, bad, _submit()])
+    run, _ = _run("gemini", fake, model="gemini-3.8-flash")
+    assert run.plan is not None and len(fake.requests) == 3
+    retried = _assistant_calls(fake.requests[2])[0]
+    assert retried[0]["extra_content"]["google"]["thought_signature"] == G.PLACEHOLDER_SIGNATURE

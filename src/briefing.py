@@ -124,7 +124,8 @@ def render(prefs: dict, recent: list[dict], scouts: list[dict], places: str = ""
             elif info["status"] == "no_matches":
                 lines.append(head + "menu is posted, but nothing on it fits the user's rules.")
             elif info["status"] == "no_menu_posted":
-                lines.append(head + "NO MENU POSTED.")
+                why = f" ({info['error']})" if info.get("error") else ""
+                lines.append(head + f"NO MENU POSTED{why}.")
             else:
                 lines.append(head + f"COULDN'T LOAD THE MENU ({info.get('error') or info['status']}).")
     return "\n".join(lines)
