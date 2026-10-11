@@ -111,8 +111,66 @@ def test_update_prefs_adds_to_lists_instead_of_replacing_them(prefs):
     saved = T.read_prefs()
     assert saved["allergies"] == ["peanuts", "shellfish"]  # finding 5: peanuts is still blocked
     assert saved["never_eat"] == ["olives", "anchovies"]
-    T.update_prefs(remove={"allergies": ["Peanuts"]})
-    assert T.read_prefs()["allergies"] == ["shellfish"]
+    T.update_prefs(remove={"never_eat": ["Olives"]})
+    assert T.read_prefs()["never_eat"] == ["anchovies"]
+
+
+def test_the_agent_cannot_remove_an_allergy(prefs):
+    """Security review: a misunderstanding must never unblock an allergen (the user can, in the form)."""
+    prefs(allergies=["peanuts"])
+    res = T.update_prefs(remove={"allergies": ["peanuts"]})
+    assert res["status"] == "error" and "memory form" in res["error"]
+    assert T.read_prefs()["allergies"] == ["peanuts"]
+
+
+@pytest.mark.parametrize("said,saved", [("peanuts and shellfish", ["peanuts", "shellfish"]),
+                                        ("nut allergy", ["nut"]), ("eggs & dairy", ["egg", "milk"]),
+                                        (["allergic to soya"], ["soy"])])
+def test_allergies_are_saved_as_names_the_checker_can_enforce(prefs, said, saved):
+    prefs()
+    assert T.update_prefs({"allergies": said})["status"] == "ok"
+    assert T.read_prefs()["allergies"] == saved
+    assert T.allergen_codes(saved) - {"nut"}  # every saved name maps to codes the menus use
+
+
+def test_an_allergy_menus_dont_label_is_also_blocked_by_name(prefs):
+    prefs(never_eat=["olives"])
+    res = T.update_prefs({"allergies": "mustard"})
+    assert res["status"] == "ok" and "double-check" in res["summary"]
+    saved = T.read_prefs()
+    assert saved["allergies"] == ["mustard"] and saved["never_eat"] == ["olives", "mustard"]
+
+
+def test_only_diets_the_checker_understands_are_saved(prefs):
+    prefs()
+    assert T.update_prefs({"diet": "keto"})["status"] == "error"
+    assert T.update_prefs({"diet": "plant-based"})["status"] == "ok"
+    assert T.read_prefs()["diet"] == ["vegan"]
+
+
+def test_places_can_be_added_next_to_a_stale_one_and_removed_by_nickname(prefs, monkeypatch):
+    from tests.test_locations import SCHOOLS
+    monkeypatch.setattr(locations, "all_locations", lambda offline=None: locations.from_schools(SCHOOLS))
+    prefs(extra_locations=["Somewhere Closed Today"])
+    assert T.update_prefs({"extra_locations": ["roth"]})["status"] == "ok"  # no crash on the stale one
+    assert T.read_prefs()["extra_locations"] == ["Somewhere Closed Today", "Roth Cafe"]
+    assert T.update_prefs(remove={"extra_locations": ["Roth"]})["status"] == "ok"
+    assert T.read_prefs()["extra_locations"] == ["Somewhere Closed Today"]
+    missing = T.update_prefs(remove={"extra_locations": ["Starbucks at the Library"]})
+    assert missing["status"] == "error" and "isn't saved" in missing["error"]  # no false "removed"
+
+
+def test_notes_stay_whole(prefs):
+    prefs(notes="Training for a marathon, needs carbs")
+    assert T.read_prefs()["notes"] == ["Training for a marathon, needs carbs"]
+    T.update_prefs({"notes": "Prefers spicy food, not too hot"})
+    assert T.read_prefs()["notes"] == ["Training for a marathon, needs carbs", "Prefers spicy food, not too hot"]
+
+
+def test_memory_entries_are_size_limited(prefs):
+    prefs()
+    assert T.update_prefs({"never_eat": "x" * 200})["status"] == "error"
+    assert T.update_prefs({"favorites": [f"dish {i}" for i in range(T.MAX_ENTRIES + 1)]})["status"] == "error"
 
 
 def test_read_prefs_repairs_bad_values_already_saved(prefs):

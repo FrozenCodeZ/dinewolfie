@@ -55,35 +55,79 @@ class _Session(NamedTuple):
     access_token: str
     refresh_token: str
     expires_at: int
+    previous: str | None  # the refresh token just before this one (a tab may not have seen the swap yet)
+    used_at: float
 
 
-_newest: dict[str, _Session] = {}  # family -> its newest session, shared by that browser's tabs
-_family: dict[str, str] = {}       # refresh token -> family (tokens this server has handed out)
+_newest: dict[str, _Session] = {}    # family -> its newest session, shared by that browser's tabs
+_family: dict[str, str] = {}         # refresh token -> family (tokens this server has handed out)
+_signed_out: dict[str, float] = {}   # families that signed out -> when (other tabs then sign out too)
 _guard = threading.Lock()
-_locks: dict[str, threading.Lock] = {}
-MAX_REMEMBERED = 2000
+_LOCKS = tuple(threading.Lock() for _ in range(64))  # a fixed pool: junk cookies can't grow it
+MAX_TOKENS, MAX_FAMILIES = 4000, 1000
+IDLE_S = REMEMBER_DAYS * 86400  # forget a sign-in nobody used for this long
 
 
 def _lock_for(family: str) -> threading.Lock:
+    return _LOCKS[hash(family) % len(_LOCKS)]
+
+
+def _family_of(token: str) -> str:
+    """The family a cookie's token belongs to. Unknown tokens (e.g. after a restart) get one, and the
+    same one for every tab that brings that token, so those tabs don't renew it in parallel."""
     with _guard:
-        return _locks.setdefault(family, threading.Lock())
+        family = _family.get(token)
+        if family is None:
+            family = _family[token] = uuid.uuid4().hex
+            _trim()
+        return family
 
 
-def _account(res, email: str, family: str) -> Account:
-    """Turn a Supabase auth response into an Account and remember it as the family's newest session."""
+def _trim() -> None:
+    """Keep the maps small (call with _guard held). Old tokens and idle sign-ins are useless anyway."""
+    for token in list(_family)[: max(0, len(_family) - MAX_TOKENS)]:
+        _family.pop(token, None)
+    now = time.time()
+    for family in [f for f, s in _newest.items() if now - s.used_at > IDLE_S]:
+        _newest.pop(family, None)
+    for family in sorted(_newest, key=lambda f: _newest[f].used_at)[: max(0, len(_newest) - MAX_FAMILIES)]:
+        _newest.pop(family, None)
+    for family in [f for f, at in _signed_out.items() if now - at > IDLE_S]:
+        _signed_out.pop(family, None)
+
+
+def _account(res, email: str, family: str, used: str | None = None) -> Account:
+    """Turn a Supabase auth response into an Account and remember it as the family's newest session.
+    `used`: the refresh token that was just swapped for this one (it stays acceptable, see restore)."""
     session = res.session
     expires = int(getattr(session, "expires_at", 0) or 0) or None
     account = Account(str(res.user.id), res.user.email or email, session.refresh_token, expires, family)
     access = getattr(session, "access_token", None)
     with _guard:
         if access and session.refresh_token:
-            _newest[family] = _Session(access, session.refresh_token, expires or 0)
+            old = _newest.get(family)
+            if old and old.refresh_token == session.refresh_token:
+                previous = old.previous      # same session taken over: nothing was swapped
+            elif old:
+                previous = old.refresh_token
+            else:
+                previous = used if used != session.refresh_token else None
+            _newest[family] = _Session(access, session.refresh_token, expires or 0, previous, time.time())
         if session.refresh_token:
             _family[session.refresh_token] = family
-            if len(_family) > MAX_REMEMBERED:  # old tokens are useless anyway; keep the map small
-                for token in list(_family)[: len(_family) - MAX_REMEMBERED]:
-                    _family.pop(token, None)
+        _trim()
     return account
+
+
+def _check_signed_in(family: str) -> None:
+    with _guard:
+        if family in _signed_out:
+            raise AccountError("You signed out in another tab. Sign in again.", expired=True)
+
+
+def _forget_family(family: str) -> None:
+    with _guard:
+        _newest.pop(family, None)
 
 
 def _rejected(exc: Exception) -> bool:
@@ -167,24 +211,28 @@ def restore(client, refresh_token: str) -> Account:
     """Sign back in from the token saved in this browser's cookie (page reloads, new tabs).
 
     If another tab already renewed this sign-in, take its newest session instead of using the
-    cookie's older token (which Supabase would treat as stolen)."""
-    with _guard:
-        family = _family.get(refresh_token) or uuid.uuid4().hex
+    cookie's older token (which Supabase would treat as stolen). Only the newest token, or the one
+    just before it, gets that shortcut: any older token goes to Supabase to judge."""
+    family = _family_of(refresh_token)
     with _lock_for(family):
+        _check_signed_in(family)
         try:
-            res = _take_newest(client, family) or client.auth.refresh_session(refresh_token)
+            res = _take_newest(client, family, refresh_token) or client.auth.refresh_session(refresh_token)
         except Exception as exc:
+            if _rejected(exc):
+                _forget_family(family)
             raise AccountError(friendly_error(exc), expired=_rejected(exc)) from exc
         if res is None or res.user is None or res.session is None:
             raise AccountError("Your saved sign-in has expired. Sign in again.", expired=True)
-        return _account(res, "", family)
+        return _account(res, "", family, used=refresh_token)
 
 
-def _take_newest(client, family: str):
-    """Use the family's newest session if it's still good (no new token), else renew it once."""
+def _take_newest(client, family: str, presented: str | None = None):
+    """Use the family's newest session if it's still good (no new token), else renew it once.
+    `presented`: a token from a cookie, which must be the newest or the one just before it."""
     with _guard:
         newest = _newest.get(family)
-    if newest is None:
+    if newest is None or (presented is not None and presented not in (newest.refresh_token, newest.previous)):
         return None
     if newest.expires_at - EARLY_S > time.time():
         return client.auth.set_session(newest.access_token, newest.refresh_token)
@@ -193,20 +241,25 @@ def _take_newest(client, family: str):
 
 def ensure_fresh(client, account: Account) -> bool:
     """Make sure this tab's sign-in is valid before reading or writing. True if its refresh token
-    changed (the app then updates the cookie). Raises AccountError(expired=True) if it's gone."""
+    changed (the app then updates the cookie). Raises AccountError(expired=True) if it's gone,
+    including right after this browser signed out in another tab."""
+    family = account.family or uuid.uuid4().hex
+    _check_signed_in(family)
     if account.expires_at and account.expires_at - EARLY_S > time.time():
         return False
-    family = account.family or uuid.uuid4().hex
     with _lock_for(family):
         try:
             res = _take_newest(client, family) if account.family else None
+            used = None if res is not None else account.refresh_token
             if res is None:
                 res = client.auth.refresh_session(account.refresh_token)
         except Exception as exc:
+            if _rejected(exc):
+                _forget_family(family)
             raise AccountError(friendly_error(exc), expired=_rejected(exc)) from exc
         if res is None or res.session is None:
             raise AccountError("Your sign-in has expired. Sign in again.", expired=True)
-        fresh = _account(res, account.email, family)
+        fresh = _account(res, account.email, family, used=used)
     changed = fresh.refresh_token != account.refresh_token
     account.refresh_token, account.expires_at, account.family = fresh.refresh_token, fresh.expires_at, family
     return changed
@@ -223,12 +276,16 @@ def cookie_script(refresh_token: str | None) -> str:
     return f"<script>document.cookie = '{COOKIE}=; path=/; max-age=0; SameSite=Lax';</script>"
 
 
-def sign_out(client, account: Account | None = None) -> None:
-    """Sign out in this browser only ("local"): your phone and other computers stay signed in."""
+def sign_out(client, account: Account | None = None) -> bool:
+    """Sign out in this browser only ("local"): your phone and other computers stay signed in.
+    This browser's other tabs sign out on their next step too. False if Supabase couldn't be told
+    (the session then ends on its own when it expires)."""
     if account is not None and account.family:
-        with _guard:
+        with _lock_for(account.family), _guard:
             _newest.pop(account.family, None)
+            _signed_out[account.family] = time.time()
     try:
         client.auth.sign_out({"scope": "local"})
-    except Exception:  # signing out locally always works; a network error here doesn't matter
-        pass
+    except Exception:  # signing out here still works; Supabase just didn't hear about it
+        return False
+    return True

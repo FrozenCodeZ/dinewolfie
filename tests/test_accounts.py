@@ -255,8 +255,12 @@ def test_restore_signs_back_in_once_per_token():
     again = accounts.restore(sb, first.refresh_token)
     assert again.user_id == "u-wolf" and again.email == "wolf@x.edu"
     assert again.refresh_token != first.refresh_token  # rotated, like Supabase does
-    with pytest.raises(accounts.AccountError):
-        accounts.restore(sb, first.refresh_token)  # the old one no longer works
+    _expire(again)
+    _expire_server(sb.server)
+    accounts.ensure_fresh(sb, again)  # an hour later: rotated once more
+    with pytest.raises(accounts.AccountError) as old:
+        accounts.restore(sb, first.refresh_token)  # two swaps behind: Supabase refuses it
+    assert old.value.expired
 
 
 def test_cookie_script_saves_and_clears_safely():
@@ -346,3 +350,45 @@ def test_restore_tells_an_expired_sign_in_from_a_network_problem(monkeypatch):
     with pytest.raises(accounts.AccountError) as blip:
         accounts.restore(sb, "rt-whatever")
     assert not blip.value.expired  # the app keeps the cookie and tries again later
+
+
+def test_an_old_copied_token_cannot_take_over_the_newest_sign_in():
+    """Security review: only the newest token, or the one just before it, may share the session."""
+    tab_a, thief = _two_tabs()
+    a = accounts.sign_in(tab_a, "wolf@x.edu", "password1")
+    stolen = a.refresh_token
+    for _ in range(2):  # two hours later the victim's tab has rotated twice
+        _expire(a)
+        _expire_server(tab_a.server)
+        accounts.ensure_fresh(tab_a, a)
+    with pytest.raises(accounts.AccountError):
+        accounts.restore(thief, stolen)
+    assert thief.current is None  # nothing was handed over
+
+
+def test_tabs_reopening_after_a_restart_join_one_sign_in():
+    tab_a, tab_b = _two_tabs()
+    first = accounts.sign_in(tab_a, "wolf@x.edu", "password1")
+    accounts._newest.clear(), accounts._family.clear()  # restart; both tabs still hold the same cookie
+    a = accounts.restore(tab_a, first.refresh_token)
+    b = accounts.restore(tab_b, first.refresh_token)  # even long after A: shares A's session
+    assert a.family == b.family and b.refresh_token == a.refresh_token
+    assert tab_a.server["revoked"] == 0
+
+
+def test_signing_out_signs_out_the_other_tabs_of_that_browser():
+    tab_a, tab_b = _two_tabs()
+    a = accounts.sign_in(tab_a, "wolf@x.edu", "password1")
+    b = accounts.restore(tab_b, a.refresh_token)
+    assert accounts.sign_out(tab_a, a) is True
+    with pytest.raises(accounts.AccountError) as gone:
+        accounts.ensure_fresh(tab_b, b)  # even though B's access token hasn't expired yet
+    assert gone.value.expired
+    with pytest.raises(accounts.AccountError):
+        accounts.restore(tab_b, a.refresh_token)  # and the cookie can't bring it back
+
+
+def test_junk_cookies_do_not_grow_memory():
+    for i in range(accounts.MAX_TOKENS + 50):
+        accounts._family_of(f"junk-{i}")
+    assert len(accounts._family) <= accounts.MAX_TOKENS and len(accounts._LOCKS) == 64

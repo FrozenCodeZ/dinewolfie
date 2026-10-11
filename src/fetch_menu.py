@@ -106,8 +106,16 @@ def _write_cache(path: Path, url: str, data) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     wrapped = {"fetched_at": config.now().isoformat(timespec="seconds"), "url": url, "data": data}
     partial = path.with_name(path.name + ".part")  # write, then swap in: a reader never sees half a file
-    partial.write_text(json.dumps(wrapped), encoding="utf-8")
-    os.replace(partial, path)
+    try:
+        partial.write_text(json.dumps(wrapped), encoding="utf-8")
+        for attempt in range(3):
+            try:
+                os.replace(partial, path)
+                break
+            except PermissionError:  # Windows: someone is reading the old file this instant
+                time.sleep(0.05 * (attempt + 1))
+    except OSError:
+        pass  # couldn't save the copy; the data we just fetched is still good to use
     return wrapped
 
 

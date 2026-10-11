@@ -5,7 +5,7 @@ import json
 import pytest
 
 import config
-from src import groq_agent, locations, storage
+from src import accounts, groq_agent, locations, storage
 from src import tools as T
 
 SAMPLE_DATE = "2026-10-01"
@@ -21,6 +21,9 @@ def offline_sample(tmp_path, monkeypatch):
     groq_agent._unavailable.clear()
     groq_agent._no_reasoning.clear()
     groq_agent._discovered.clear()
+    accounts._newest.clear()          # sign-ins shared between tabs are per process too
+    accounts._family.clear()
+    accounts._signed_out.clear()
     monkeypatch.setattr(config, "PREFS_FILE", tmp_path / "prefs.json")
     monkeypatch.setattr(config, "HISTORY_FILE", tmp_path / "history.json")
     T.clear_cache()

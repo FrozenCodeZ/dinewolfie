@@ -509,9 +509,12 @@ def tray_html(plan: dict) -> str:
 # Sidebar: memory, data source, demo switches
 # ---------------------------------------------------------------------------------------
 def sign_out_account() -> None:
-    accounts.sign_out(supabase_client(), st.session_state.get("account"))  # this browser only
+    told = accounts.sign_out(supabase_client(), st.session_state.get("account"))  # this browser only
     forget_account()
     remember_cookie(None)
+    if not told:
+        st.session_state.store_error = ("Signed out here. The account service didn't answer, so that sign-in "
+                                        "ends on its own within an hour.")
 
 
 def account_forms() -> None:

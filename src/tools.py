@@ -204,8 +204,7 @@ def read_prefs() -> dict:
     prefs = dict(DEFAULT_PREFS)
     prefs.update(storage.current().load_prefs() or {})
     for key in EDITABLE_PREFS:
-        if key != "notes":
-            prefs[key] = _clean_pref(key, prefs.get(key), strict=False)
+        prefs[key] = _clean_pref(key, prefs.get(key), strict=False)
     return prefs
 
 
@@ -389,16 +388,32 @@ WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", 
 # Everyday words for an allergy -> the name the app uses (anything else is kept as written).
 ALLERGY_NAMES = {"dairy": "milk", "lactose": "milk", "eggs": "egg", "peanut": "peanuts", "tree nuts": "tree_nuts",
                  "tree nut": "tree_nuts", "soya": "soy", "shrimp": "shellfish", "sesame seeds": "sesame"}
+# Allergies the checker can find on menus (Nutrislice's labels, plus everyday words for them).
+KNOWN_ALLERGIES = set(config.ALLERGEN_SLUGS.values()) | set(ALLERGY_SYNONYMS)
+KNOWN_DIETS = ("vegetarian", "vegan", "halal", "pescatarian", "gluten_free")  # what diet_ok can check
+DIET_NAMES = {"veggie": "vegetarian", "plant based": "vegan", "plant-based": "vegan", "pescetarian": "pescatarian",
+              "gluten free": "gluten_free", "gluten-free": "gluten_free", "celiac": "gluten_free",
+              "coeliac": "gluten_free"}
+MAX_ENTRIES, MAX_CHARS, MAX_NOTE_CHARS = 50, 80, 300
 
 
-def _as_list(value) -> list:
+def _as_list(value, key: str = "") -> list[str]:
+    """A list preference as a list of strings. "peanuts and shellfish" is two allergies; a note
+    is never split."""
     if value is None:
         return []
-    if isinstance(value, str):
-        return [v.strip() for v in value.split(",") if v.strip()]
-    if isinstance(value, (list, tuple, set)):
-        return [v for v in value if v not in (None, "")]
-    return [value]
+    if isinstance(value, dict):
+        raise ValueError("expected a list of words, not an object")
+    raw = [value] if isinstance(value, str) else list(value) if isinstance(value, (list, tuple, set)) else [value]
+    out = []
+    for entry in raw:
+        if entry in (None, "") or isinstance(entry, (dict, list)):
+            continue
+        parts = [str(entry)] if key == "notes" else re.split(r"[,;]", str(entry))
+        if key in ("allergies", "diet"):
+            parts = [p for part in parts for p in re.split(r"\s+(?:and|&)\s+|\s*[&/]\s*", part)]
+        out += [p.strip() for p in parts if p.strip()]
+    return out
 
 
 def _as_number(value, key: str):
@@ -421,11 +436,20 @@ def _as_number(value, key: str):
 def _list_entry(key: str, raw, strict: bool) -> str:
     """One entry of a list preference, in the form the app and the checker use."""
     text = " ".join(str(raw).split())
+    limit = MAX_NOTE_CHARS if key == "notes" else MAX_CHARS
+    if len(text) > limit:
+        if strict:
+            raise ValueError(f"{text[:30]!r}... is too long (at most {limit} characters)")
+        text = text[:limit]
     low = text.lower()
     if key == "allergies":
+        low = re.sub(r"^(?:allergic to|allergy to)\s+|\s+(?:allergy|allergies)$", "", low)
         return ALLERGY_NAMES.get(low, low)
     if key == "diet":
-        return low.replace("-", "_").replace(" ", "_")
+        name = DIET_NAMES.get(low, low.replace("-", "_").replace(" ", "_"))
+        if strict and name not in KNOWN_DIETS:
+            raise ValueError(f"DineWolfie can only check these diets: {', '.join(KNOWN_DIETS)}")
+        return name
     if key == "meals_to_plan":
         return normalize_meal(low)  # ValueError for "second breakfast"
     if key == "cheat_days":
@@ -445,7 +469,13 @@ def _clean_pref(key: str, value, strict: bool = True):
     saved): repair what can be repaired, drop or reset the rest, never raise."""
     if key in LIST_PREFS:
         out = []
-        for raw in _as_list(value):
+        try:
+            entries = _as_list(value, key)
+        except ValueError:
+            if strict:
+                raise
+            entries = []
+        for raw in entries:
             try:
                 entry = _list_entry(key, raw, strict)
             except ValueError:
@@ -454,6 +484,10 @@ def _clean_pref(key: str, value, strict: bool = True):
                 continue
             if entry.lower() not in (e.lower() for e in out):
                 out.append(entry)
+        if len(out) > MAX_ENTRIES:
+            if strict:
+                raise ValueError(f"too many entries (at most {MAX_ENTRIES})")
+            out = out[:MAX_ENTRIES]
         return out
     try:
         if key in NUMBER_PREFS:
@@ -490,26 +524,43 @@ def update_prefs(changes: dict | None = None, reason: str = "", remove: dict | N
         return {"status": "error", "error": f"Unknown preference keys {unknown}. "
                                             f"Allowed: {sorted(EDITABLE_PREFS)}",
                 "summary": "Rejected unknown preference keys."}
-    prefs, updated, problems = read_prefs(), {}, []
+    prefs, updated, problems, notes = read_prefs(), {}, [], []
     for key, value in changes.items():
         try:
             new = _clean_pref(key, value)
         except ValueError as exc:
             problems.append(f"{key}: {exc}")
             continue
-        if key in LIST_PREFS and key not in SET_LISTS:
-            new = _clean_pref(key, list(prefs.get(key) or []) + new)  # add, keeping what's there
+        if key == "allergies":
+            unreadable = [a for a in new if a not in KNOWN_ALLERGIES]
+            if unreadable:  # menus don't label it, so also block dishes that name it
+                updated["never_eat"] = _clean_pref("never_eat", list(updated.get("never_eat", prefs["never_eat"]))
+                                                   + unreadable, strict=False)
+                notes.append(f"Menus don't label {', '.join(unreadable)}, so DineWolfie also blocks dishes that "
+                             "mention it by name or ingredient. Tell the user to double-check with dining staff.")
+        if key in LIST_PREFS and key not in SET_LISTS:  # add, keeping what's there
+            new = _clean_pref(key, list(updated.get(key, prefs.get(key) or [])) + new, strict=False)
         updated[key] = new
     for key, value in remove.items():
         if key not in LIST_PREFS:
             problems.append(f"{key}: only lists can have entries removed")
             continue
+        if key == "allergies":
+            problems.append("allergies can only be removed by the user in the memory form (sidebar), so a "
+                            "misunderstanding can never unblock an allergen")
+            continue
         try:
-            gone = {g.lower() for g in _clean_pref(key, value, strict=False)}
+            wanted = _clean_pref(key, value, strict=False)
         except ValueError as exc:
             problems.append(f"{key}: {exc}")
             continue
-        updated[key] = [v for v in updated.get(key, prefs.get(key) or []) if v.lower() not in gone]
+        if key == "extra_locations":
+            wanted = [_known_place(w) for w in wanted]
+        gone = {g.lower() for g in wanted}
+        before = list(updated.get(key, prefs.get(key) or []))
+        updated[key] = [v for v in before if v.lower() not in gone]
+        if len(updated[key]) == len(before):
+            problems.append(f"{key}: {', '.join(wanted)} isn't saved there (saved: {', '.join(before) or 'nothing'})")
     if problems:
         return {"status": "error", "error": "Nothing was saved: " + "; ".join(problems),
                 "summary": "Memory not updated: " + "; ".join(problems)}
@@ -517,8 +568,16 @@ def update_prefs(changes: dict | None = None, reason: str = "", remove: dict | N
         return {"status": "error", "error": "Nothing to change.", "summary": "Memory not updated: nothing to change."}
     prefs.update(updated)
     write_prefs(prefs)
-    return {"status": "ok", "prefs": prefs,
-            "summary": f"Memory updated: {', '.join(f'{k}={v}' for k, v in updated.items())}."}
+    summary = f"Memory updated: {', '.join(f'{k}={v}' for k, v in updated.items())}."
+    return {"status": "ok", "prefs": prefs, "summary": " ".join([summary] + notes),
+            **({"note": " ".join(notes)} if notes else {})}
+
+
+def _known_place(name: str) -> str:
+    try:
+        return normalize_hall(name)
+    except ValueError:
+        return name
 
 
 def get_meal_history(days: int = 3) -> dict:
