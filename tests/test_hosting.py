@@ -32,8 +32,11 @@ class FakeWorksheet:
         self.rows.append(list(values))
 
     def update(self, values, range_name, value_input_option=None):
-        row = int(range_name.split(":")[0][1:])
-        self.rows[row - 1] = list(values[0])
+        start = range_name.split(":")[0]  # "A5:E5" (a whole row) or "C5" (one cell)
+        col, row = ord(start[0]) - ord("A"), int(start[1:])
+        cells = self.rows[row - 1] + [""] * (len(storage.SHEET_HEADER) - len(self.rows[row - 1]))
+        cells[col:col + len(values[0])] = list(values[0])
+        self.rows[row - 1] = cells
 
 
 def test_sheet_store_round_trip_per_user():

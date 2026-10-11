@@ -5,7 +5,8 @@ Set DINEWOLFIE_LIVE_FETCH=off to use only saved menus.
 
 Politeness rules (see README "Data"):
   * Any refusal or rate limit (HTTP 401/403/429 or a Retry-After header) stops ALL
-    fetching for the rest of the run; nothing is retried.
+    fetching for a while (as long as Nutrislice asks, at least 15 minutes, 6 hours after a
+    401/403); nothing is retried or worked around meanwhile.
   * One request returns a whole week for one station, and we cache it.
   * A cached week is re-used all day; we refresh it at most once per day.
   * Weeks that are fully in the past are never fetched again.
@@ -50,23 +51,41 @@ _fetch_lock = threading.RLock()
 
 
 _last_request_at = 0.0
-# Set the first time Nutrislice refuses or rate-limits us. After that, no request is sent
-# again until the program restarts.
+# Set when Nutrislice refuses or rate-limits us. Then no request at all is sent for a while: as long as
+# it asks (Retry-After), at least 15 minutes, 6 hours if it blocked us. A refusal never stops menus for
+# good on a server that runs for days, and nothing is retried or worked around while paused.
+MIN_PAUSE_S = 15 * 60
+RATE_LIMIT_PAUSE_S = 60 * 60
+BLOCKED_PAUSE_S = 6 * 60 * 60
+MAX_PAUSE_S = 24 * 60 * 60
 _stopped_reason: str | None = None
+_stopped_until = 0.0
+_clock = time.monotonic
+
+
+def _pause_for(status: int, headers) -> float:
+    """How long to send nothing after a refusal."""
+    if status in (401, 403):
+        return BLOCKED_PAUSE_S
+    after = str((headers or {}).get("Retry-After") or "").strip()
+    if re.fullmatch(r"[0-9]{1,9}", after):
+        return min(MAX_PAUSE_S, max(MIN_PAUSE_S, float(after)))
+    return RATE_LIMIT_PAUSE_S  # no wait given (or given as a date): an hour
 
 
 def _get_json(url: str) -> dict | list:
     """GET a URL politely (rate-limited, identified User-Agent).
 
     This is the ONLY place that contacts Nutrislice. It refuses unless live fetching is
-    switched on (config.LIVE_FETCH), and it stops for good on any refusal or rate limit.
+    switched on (config.LIVE_FETCH), and after any refusal or rate limit it sends nothing for a while.
     """
-    global _last_request_at, _stopped_reason
+    global _last_request_at, _stopped_reason, _stopped_until
     if not config.LIVE_FETCH:
         raise FetchError("Live fetching from Nutrislice is turned off (DINEWOLFIE_LIVE_FETCH is not 'on'), "
                          "so only saved menus are used.")
-    if _stopped_reason:
-        raise FetchError(f"Not contacting Nutrislice again: {_stopped_reason}")
+    if fetching_stopped():
+        minutes = max(1, round((_stopped_until - _clock()) / 60))
+        raise FetchError(f"Not contacting Nutrislice again for about {minutes} min: {_stopped_reason}")
     wait = config.POLITE_DELAY_S - (time.monotonic() - _last_request_at)
     if wait > 0:
         time.sleep(wait)
@@ -76,16 +95,18 @@ def _get_json(url: str) -> dict | list:
     finally:
         _last_request_at = time.monotonic()
     if resp.status_code in (401, 403, 429) or resp.headers.get("Retry-After"):
-        # Being blocked or rate-limited: stop everything, don't retry or work around it.
+        # Being blocked or rate-limited: stop everything for a while, don't retry or work around it.
+        pause = _pause_for(resp.status_code, resp.headers)
         _stopped_reason = f"it refused or rate-limited a request (HTTP {resp.status_code})."
+        _stopped_until = _clock() + pause
         raise FetchError(f"Nutrislice refused the request (HTTP {resp.status_code}). "
-                         "Stopped all fetching instead of retrying.")
+                         f"Stopped all fetching for about {round(pause / 60)} min instead of retrying.")
     resp.raise_for_status()
     return resp.json()
 
 
 def fetching_stopped() -> bool:
-    return _stopped_reason is not None
+    return _stopped_reason is not None and _clock() < _stopped_until
 
 
 def week_start(d: date) -> date:
@@ -193,9 +214,9 @@ def list_stations(hall: str, offline: bool = False) -> list[Station]:
 def _schools_of(loc, schools: list[dict]) -> list[dict]:
     """The Nutrislice locations behind one of ours (East/West are also matched by slug or name)."""
     from src import locations
-    if loc.key in config.HALLS:  # one match; prefer the listed id, then one that has menus
+    if loc.key in config.HALLS:  # one match; prefer one that has menus, then the listed id
         hits = [s for s in schools if locations.hall_for_school(s) == loc.key]
-        hits.sort(key=lambda s: (s.get("id") != loc.school_id, not s.get("active_menu_types")))
+        hits.sort(key=lambda s: (not s.get("active_menu_types"), s.get("id") != loc.school_id))
         return hits[:1]
     return [s for s in schools if s.get("id") in loc.school_ids]
 

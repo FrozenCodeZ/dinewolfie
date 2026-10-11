@@ -154,7 +154,8 @@ def build_plan(goal: str, plan_date: date, scouts: list[dict], prefs: dict, rece
 def run_builtin(run, goal: str, plan_date: date, because: str | None = None) -> None:
     """Fill in `run` with a checked plan made without AI. `because`: why the AI wasn't used."""
     prefs = briefing.run_lookup("get_prefs", T.get_prefs, {}).get("prefs") or T.read_prefs()
-    recent = briefing.run_lookup("get_meal_history", T.get_meal_history, {"days": 3}).get("recent_plans", [])
+    recent = briefing.run_lookup("get_meal_history", T.get_meal_history,
+                                 {"days": 3, "date": plan_date.isoformat()}).get("recent_plans", [])
     recent_names = {name.lower() for p in recent for names in p.get("meals", {}).values() for name in names}
     known = locations.all_locations()
     places = restrict_places(goal, T.considered(prefs, [loc.key for loc in locations.named_in(goal, known)]))

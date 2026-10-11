@@ -14,6 +14,7 @@ A ContextVar keeps visitors apart: each Streamlit session runs in its own thread
 from __future__ import annotations
 
 import json
+import time
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ from pathlib import Path
 import config
 
 HISTORY_LIMIT = 60
+_clock = time.monotonic
 SHEET_CELL_LIMIT = 45_000  # Google Sheets allows 50,000 characters per cell; keep a margin
 SHEET_HEADER = ["user_id", "name", "prefs_json", "history_json", "updated_at"]
 
@@ -70,76 +72,129 @@ class MemoryStore:
         self.history = list(history[-HISTORY_LIMIT:])
 
 
-class SheetStore:
+class _CachedRow:
+    """What the two account stores share: a copy of the person's row, read again after REFRESH_S seconds
+    and always before a change (refresh(force=True), see tools.reread_memory), so another tab or device's
+    save isn't overwritten (a new allergy saved on the phone stays). After a failed read it waits
+    REFRESH_S before asking again; a change that failed to save stays in this tab's copy (still
+    enforced here) and is sent again with the next save, instead of being replaced by the older copy."""
+    REFRESH_S = 10
+
+    def _start(self) -> None:
+        self._prefs: dict | None = None
+        self._history: list[dict] = []
+        self._loaded_at = 0.0
+        self._unsaved: set[str] = set()  # "prefs" / "history": changed here but not saved yet
+        self.refresh(force=True)
+
+    def _read(self) -> tuple[dict | None, list[dict]] | None:
+        """(prefs, history) as saved, or None if this person has no row yet."""
+        raise NotImplementedError
+
+    def _save(self, column: str) -> None:
+        raise NotImplementedError
+
+    def refresh(self, force: bool = False) -> None:
+        if not force and _clock() - self._loaded_at < self.REFRESH_S:
+            return
+        try:
+            row = self._read()
+        except Exception:
+            self._loaded_at = _clock()  # don't ask a database that's down on every read
+            if force:
+                raise
+            return
+        self._loaded_at = _clock()
+        if row is not None:
+            prefs, history = row
+            if "prefs" not in self._unsaved:
+                self._prefs = prefs
+            if "history" not in self._unsaved:
+                self._history = history
+
+    def _keep(self, column: str) -> None:
+        try:
+            self._save(column)
+        except Exception:
+            self._unsaved.add(column)
+            raise
+        self._unsaved.discard(column)
+
+    def load_prefs(self) -> dict | None:
+        self.refresh()
+        return dict(self._prefs) if self._prefs is not None else None
+
+    # The copy in memory is updated first, so this tab keeps working even if the save fails.
+    def save_prefs(self, prefs: dict) -> None:
+        self._prefs = dict(prefs)
+        self._keep("prefs")
+
+    def load_history(self) -> list[dict]:
+        self.refresh()
+        return list(self._history)
+
+    def save_history(self, history: list[dict]) -> None:
+        self._history = list(history)[-HISTORY_LIMIT:]
+        self._keep("history")
+
+
+class SheetStore(_CachedRow):
     """One row per user: user_id | name | prefs_json | history_json | updated_at.
 
-    `worksheet` is a gspread Worksheet (or anything with the same few methods, for tests).
-    The row is read once and cached; every save writes the whole row back.
+    `worksheet` is a gspread Worksheet (or anything with the same few methods, for tests). A save
+    writes only its own cell (prefs or history) plus the time, so saving a plan can't overwrite
+    preferences another tab just saved.
     """
     kind = "sheet"
 
     def __init__(self, worksheet, user_id: str, name: str = ""):
         self.ws, self.user_id, self.name = worksheet, user_id.strip().lower(), name
         self._row: int | None = None
-        self._prefs: dict | None = None
-        self._history: list[dict] = []
-        self._load()
+        self._start()
 
-    def _load(self) -> None:
+    def _read(self):
         cell = self.ws.find(self.user_id, in_column=1)
         if cell is None:
-            return
+            return None
         self._row = cell.row
         values = self.ws.row_values(cell.row) + [""] * len(SHEET_HEADER)
-        self._prefs = json.loads(values[2]) if values[2] else None
-        self._history = json.loads(values[3]) if values[3] else []
+        return (json.loads(values[2]) if values[2] else None), (json.loads(values[3]) if values[3] else [])
 
-    def _write(self) -> None:
+    def _history_json(self) -> str:
         history = self._history[-HISTORY_LIMIT:]
         history_json = json.dumps(history)
         while len(history_json) > SHEET_CELL_LIMIT and history:  # drop oldest plans until it fits
             history = history[1:]
             history_json = json.dumps(history)
         self._history = history
-        row = [self.user_id, self.name, json.dumps(self._prefs or {}), history_json,
-               config.now().isoformat(timespec="seconds")]
+        return history_json
+
+    def _save(self, column: str) -> None:
+        stamp = config.now().isoformat(timespec="seconds")
         if self._row is None:
-            self.ws.append_row(row, value_input_option="RAW")
+            self.ws.append_row([self.user_id, self.name, json.dumps(self._prefs or {}), self._history_json(), stamp],
+                               value_input_option="RAW")
             cell = self.ws.find(self.user_id, in_column=1)
             self._row = cell.row if cell else None
-        else:
-            self.ws.update([row], f"A{self._row}:E{self._row}", value_input_option="RAW")
-
-    def load_prefs(self) -> dict | None:
-        return dict(self._prefs) if self._prefs is not None else None
-
-    def save_prefs(self, prefs: dict) -> None:
-        self._prefs = dict(prefs)
-        self._write()
-
-    def load_history(self) -> list[dict]:
-        return list(self._history)
-
-    def save_history(self, history: list[dict]) -> None:
-        self._history = list(history)
-        self._write()
+            return
+        value = json.dumps(self._prefs or {}) if column == "prefs" else self._history_json()
+        self.ws.update([[value]], f"{'C' if column == 'prefs' else 'D'}{self._row}", value_input_option="RAW")
+        self.ws.update([[stamp]], f"E{self._row}", value_input_option="RAW")
 
 
-class SupabaseStore:
+class SupabaseStore(_CachedRow):
     """One row per account in public.dinewolfie_memory (see supabase/schema.sql).
 
     `client` is that person's signed-in Supabase client, so Row Level Security only ever lets it
-    touch their own row. The row is read once and cached; a save writes only the part that changed
-    (preferences, or past plans), so a small change doesn't resend every saved plan.
+    touch their own row. A save writes only the part that changed (preferences, or past plans), so a
+    small change doesn't resend every saved plan. Refreshing and unsaved changes: see _CachedRow.
     """
     kind = "supabase"
     TABLE = "dinewolfie_memory"
 
     def __init__(self, client, user_id: str, account=None):
         self.client, self.user_id, self.account = client, str(user_id), account
-        self._prefs: dict | None = None
-        self._history: list[dict] = []
-        self._load()
+        self._start()
 
     def _fresh(self):
         """The table, after making sure the sign-in is still valid (access tokens last an hour)."""
@@ -150,34 +205,20 @@ class SupabaseStore:
             self.client.auth.get_session()
         return self.client.table(self.TABLE)
 
-    def _load(self) -> None:
+    def _read(self):
         rows = self._fresh().select("prefs,history").eq("user_id", self.user_id).limit(1).execute().data
-        if rows:
-            self._prefs = rows[0].get("prefs") or None
-            self._history = rows[0].get("history") or []
+        if not rows:
+            return None
+        return rows[0].get("prefs") or None, rows[0].get("history") or []
 
-    def _write(self, **columns) -> None:
-        row = {"user_id": self.user_id, **columns,
+    def _save(self, column: str) -> None:
+        value = self._prefs if column == "prefs" else self._history
+        row = {"user_id": self.user_id, column: value,
                "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         try:
             self._fresh().upsert(row, on_conflict="user_id").execute()
         except Exception as exc:
             raise RuntimeError(f"Couldn't save to your account ({exc}).") from exc
-
-    def load_prefs(self) -> dict | None:
-        return dict(self._prefs) if self._prefs is not None else None
-
-    # The copy in memory is updated first, so this tab keeps working even if the save fails.
-    def save_prefs(self, prefs: dict) -> None:
-        self._prefs = dict(prefs)
-        self._write(prefs=self._prefs)
-
-    def load_history(self) -> list[dict]:
-        return list(self._history)
-
-    def save_history(self, history: list[dict]) -> None:
-        self._history = list(history)[-HISTORY_LIMIT:]
-        self._write(history=self._history)
 
 
 def open_worksheet(service_account_info: dict, sheet_id: str, tab: str = "users"):

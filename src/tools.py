@@ -10,9 +10,15 @@ something can go wrong, a "status" the agent must look at.
 """
 from __future__ import annotations
 
+import contextlib
+import functools
 import json
+import math
 import os
 import re
+import threading
+import time
+import unicodedata
 from contextvars import ContextVar
 from datetime import date, timedelta
 from pathlib import Path
@@ -46,6 +52,14 @@ def data_mode() -> str:
     return _settings()["data_mode"] or config.DATA_MODE
 
 
+def _offline_now() -> bool:
+    """This session uses only saved data: sample menus, or the "Network down" demo switch."""
+    return data_mode() == "sample" or bool(_settings().get("offline"))
+
+
+locations.offline_hint = _offline_now  # so the list of places isn't fetched from Nutrislice either
+
+
 def tavily_key() -> str | None:
     return _settings()["tavily_key"] or os.getenv("TAVILY_API_KEY") or None
 
@@ -77,6 +91,29 @@ _DEFAULT_SESSION.update(_session.get())  # env switches (CLI) become the default
 
 # --- Dates ----------------------------------------------------------------------
 
+# While a queued day is planned, a plan for any other day is rejected (see plan_date_locked).
+_plan_date: ContextVar = ContextVar("dinewolfie_plan_date", default=None)
+
+
+@contextlib.contextmanager
+def plan_date_locked(day: date):
+    """Plans submitted inside this block must be for `day` (the 3-day queue sends each under its day)."""
+    token = _plan_date.set(day.isoformat())
+    try:
+        yield
+    finally:
+        _plan_date.reset(token)
+
+
+def _int(value, default: int, low: int, high: int) -> int:
+    """A count the model sent ("8", 8.0, "eight") as an int in [low, high]; the default if it isn't one."""
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        number = default
+    return max(low, min(number, high))
+
+
 def resolve_date(value: str | None) -> date:
     if not value or str(value).lower() == "today":
         return config.today()
@@ -86,7 +123,17 @@ def resolve_date(value: str | None) -> date:
 
 
 # --- Loading menus ----------------------------------------------------------------
-_day_cache: dict[tuple, tuple[list, dict]] = {}
+# Loaded menus, shared by every visitor of this server: (hall, day, data mode, offline) ->
+# (good until, items, meta, the error it raised). Kept briefly and read again from the disk cache, which
+# decides when to contact Nutrislice (each station at most once a day, so a day Nutrislice posts later
+# today shows up tomorrow); a failed load is tried again after a few minutes.
+FETCH_DAYS_BACK, FETCH_DAYS_AHEAD = 7, 14  # visitors can't make the server fetch arbitrary weeks
+DAY_CACHE_S = 30 * 60
+EMPTY_CACHE_S = 3 * 60
+MAX_CACHED_DAYS = 120
+_day_cache: dict[tuple, tuple[float, list, dict, Exception | None]] = {}
+_cache_lock = threading.Lock()
+_clock = time.monotonic
 
 
 def _sample_file(day: date) -> Path | None:
@@ -101,9 +148,29 @@ def load_items(hall: str, day: date) -> tuple[list[dict], dict]:
     """All normalized items for a hall on a day, plus where they came from."""
     offline = _settings()["offline"]
     key = (hall, day, data_mode(), offline)
-    if key in _day_cache:
-        return _day_cache[key]
+    hit = _day_cache.get(key)
+    if hit and _clock() < hit[0]:
+        if hit[3] is not None:
+            raise type(hit[3])(str(hit[3]))
+        return hit[1], hit[2]
+    try:
+        items, meta = _load_items(hall, day, offline)
+    except FetchError as exc:  # also NotPosted
+        _remember(key, EMPTY_CACHE_S, [], {}, exc)
+        raise
+    _remember(key, DAY_CACHE_S if items else EMPTY_CACHE_S, items, meta, None)
+    return items, meta
 
+
+def _remember(key: tuple, seconds: float, items: list, meta: dict, error: Exception | None) -> None:
+    with _cache_lock:
+        if len(_day_cache) >= MAX_CACHED_DAYS:  # drop the entries closest to expiring
+            for old in sorted(_day_cache, key=lambda k: _day_cache[k][0])[:len(_day_cache) - MAX_CACHED_DAYS + 1]:
+                _day_cache.pop(old, None)
+        _day_cache[key] = (_clock() + seconds, items, meta, error)
+
+
+def _load_items(hall: str, day: date, offline: bool) -> tuple[list[dict], dict]:
     if data_mode() == "sample":
         path = _sample_file(day)
         if path is None:
@@ -115,7 +182,9 @@ def load_items(hall: str, day: date) -> tuple[list[dict], dict]:
         meta = {"source": "sample", "note": f"sample data from {data['date']}", "errors": []}
     else:
         loc = locations.get(hall)
-        raw = fetch_hall_day(loc.key, day, offline=offline)
+        ahead = (day - config.today()).days
+        in_window = -FETCH_DAYS_BACK <= ahead <= FETCH_DAYS_AHEAD  # anything else only from the saved copies
+        raw = fetch_hall_day(loc.key, day, offline=offline or not in_window)
         all_day = config.RETAIL_DEFAULT_MEALS if loc.kind == locations.RETAIL else None
         items = parse_hall_day(loc.key, raw["stations"], loc.code, all_day)
         sources = set(raw["sources"].values())
@@ -126,7 +195,11 @@ def load_items(hall: str, day: date) -> tuple[list[dict], dict]:
                             else "Network unavailable and nothing cached for this day.")
             if not items:
                 raise FetchError("Couldn't reach Nutrislice and there is no cached copy of this menu.")
-    _day_cache[key] = (items, meta)
+        if not items and raw["errors"]:  # every station failed to load: that's not "closed"
+            raise FetchError(f"Couldn't load {loc.key}'s menu: {raw['errors'][0]}")
+        if not items and not in_window:
+            raise FetchError(f"DineWolfie only asks Nutrislice for menus from {FETCH_DAYS_BACK} days ago to "
+                             f"{FETCH_DAYS_AHEAD} days ahead, and {day} isn't saved.")
     return items, meta
 
 
@@ -136,7 +209,13 @@ def clear_cache() -> None:
 
 def _menu(hall: str, meal: str, day: date) -> tuple[list[dict], dict]:
     """Items for one hall + meal. Status is 'ok', 'no_menu_posted' or 'error'."""
-    hall = normalize_hall(hall)
+    try:
+        hall = normalize_hall(hall)
+    except ValueError:
+        if hall not in (read_prefs().get("extra_locations") or []):
+            raise
+        return [], {"status": "no_menu_posted", "errors": [],
+                    "note": f"{hall} isn't on Nutrislice right now: probably closed (a break or holiday)."}
     meal = normalize_meal(meal)
     if (hall, meal) in _settings()["missing"]:
         return [], {"status": "no_menu_posted", "source": "nutrislice", "errors": []}
@@ -190,19 +269,28 @@ ALLERGY_SYNONYMS = {
 }
 # Words to look for in item names/ingredients as a second safety net, for dishes the menu doesn't
 # label. Blocking a safe dish by mistake is far better than serving an unsafe one.
-_WHEAT_WORDS = ["wheat", "flour", "bread", "breaded", "pasta", "penne", "spaghetti", "macaroni", "noodle",
-                "couscous", "semolina", "bulgur", "barley", "rye", "seitan", "cracker", "croissant", "bagel",
-                "muffin", "pancake", "waffle", "pizza", "tortilla", "pita", "bun", "crouton", "biscuit", "cake",
-                "cookie", "brownie", "pretzel", "panko", "dumpling", "soy sauce", "teriyaki"]
+_WHEAT_WORDS = ["wheat", "flour", "bread", "pasta", "penne", "spaghetti", "macaroni", "noodle", "ramen", "udon",
+                "lo mein", "chow mein", "orzo", "gnocchi", "couscous", "semolina", "bulgur", "barley", "rye", "malt",
+                "seitan", "cracker", "croissant", "bagel", "muffin", "pancake", "waffle", "crepe", "pizza",
+                "calzone", "stromboli", "tortilla", "quesadilla", "burrito", "pita", "naan", "roti", "focaccia",
+                "ciabatta", "baguette", "bun", "burger", "hoagie", "knot", "crouton", "stuffing",
+                "biscuit", "scone", "cake", "cookie", "brownie", "pastry", "pastries", "danish", "dough", "churro",
+                "pretzel", "panko", "batter", "beer", "tempura", "dumpling", "wonton", "pierogi", "empanada",
+                "egg roll", "spring roll", "gravy", "soy sauce", "teriyaki"]
 ALLERGY_WORDS = {
     "peanuts": ["peanut", "satay"],
     "tree_nuts": ["almond", "cashew", "walnut", "pecan", "pistachio", "hazelnut", "macadamia", "pine nut",
                   "brazil nut", "praline", "marzipan", "pesto", "nutella", "frangipane"],
-    "milk": ["cheese", "milk", "cream", "butter", "yogurt", "whey", "casein", "ghee", "custard", "cheddar",
-             "mozzarella", "parmesan", "ricotta", "feta", "provolone", "alfredo", "queso", "paneer", "gelato",
-             "latte", "ranch", "tzatziki"],
-    "egg": ["egg", "mayo", "mayonnaise", "aioli", "custard", "meringue", "frittata", "quiche", "omelet",
-            "omelette", "french toast"],
+    "milk": ["cheese", "milk", "cream", "creme", "crème", "butter", "yogurt", "whey", "casein", "ghee", "custard",
+             "pudding", "cheddar", "mozzarella", "parmesan", "ricotta", "feta", "provolone", "brie", "gouda", "colby",
+             "alfredo", "bechamel", "béchamel", "carbonara", "fondue", "queso", "quesadilla", "paneer", "gelato",
+             "latte", "ranch", "tzatziki", "lasagna", "pizza", "parfait", "eggnog",
+             # baked goods are made with butter and milk (a vegan label lifts this; see allergy_conflicts)
+             "cookie", "brownie", "cake", "muffin", "croissant", "pastry", "pastries", "danish", "scone", "biscuit",
+             "pancake", "waffle", "pie"],
+    "egg": ["egg", "mayo", "aioli", "custard", "meringue", "frittata", "quiche", "omelet", "french toast",
+            "carbonara", "hollandaise", "benedict", "brioche", "challah", "pancake", "waffle", "crepe",
+            "cake", "cookie", "brownie", "muffin", "croissant", "pastry", "pastries"],
     "fish": ["salmon", "tuna", "cod", "tilapia", "fish", "anchovy", "anchovies", "sardine", "trout", "halibut",
              "swordfish", "mahi", "pollock", "catfish", "haddock", "flounder", "worcestershire"],
     "shellfish": ["shrimp", "crab", "lobster", "prawn", "scallop", "clam", "mussel", "oyster", "crawfish",
@@ -211,6 +299,53 @@ ALLERGY_WORDS = {
     "soy": ["tofu", "soy", "edamame", "miso", "tempeh", "tamari", "teriyaki"],
     "gluten": _WHEAT_WORDS, "wheat": _WHEAT_WORDS,
 }
+# How a safety-net word is found in a dish's name, description and ingredients. By default at the start of
+# a word with any ending ("cheese" finds "Cheeseburger", "egg" finds "Eggnog", "batter" finds "Beer-Battered").
+_ANYWHERE = {"bread", "burger", "milk", "dough", "cake", "fish"}  # also inside a word: "Cornbread", "Monkfish"
+_WHOLE = {"cod", "rye", "bun", "pita", "roti", "ranch", "scallop", "mahi", "malt", "beer", "pie"}  # not "Scalloped"
+# Per allergy, words that look like it but aren't, removed before matching. "almond milk" isn't dairy
+# (it still is a tree nut), and highly refined soybean oil is exempt from soy allergen labeling. Waffle
+# fries are potatoes (no egg), but seasoned ones are often coated in flour, so they still count for gluten.
+_LOOKALIKES = {
+    "egg": re.compile(r"\beggplants?\b|\bwaffle[- ]?(?:fries|cut)\b"),
+    "milk": re.compile(r"\bwaffle[- ]?(?:fries|cut)\b|\bbutternut\b|\bbutterfl(?:y|ied)\b|"
+                       r"\b(?:soy|oat|almond|coconut|rice|cashew|hemp|pea)[- ]?"
+                       r"milks?\b|\b(?:peanut|almond|cashew|nut|seed|sunflower|apple|cocoa|shea)[- ]?butter\b"),
+    "soy": re.compile(r"\bsoybean oil\b"),
+}
+
+
+def _fold(text) -> str:
+    """Lower case without accents, so "Jalapeño" and "jalapeno" are the same word."""
+    return "".join(c for c in unicodedata.normalize("NFKD", str(text)) if not unicodedata.combining(c)).lower()
+
+
+def _root(word: str) -> str:
+    """A food name without its plural or -y ending: "strawberries" and "strawberry" -> "strawberr",
+    "tomatoes" -> "tomato", "seeds" -> "seed". Found anywhere, it matches every form of the word."""
+    for end in ("ies", "es", "s", "y"):
+        if word.endswith(end) and len(word) - len(end) >= 3:
+            return word[:-len(end)]
+    return word
+
+
+@functools.lru_cache(maxsize=256)
+def _allergy_regex(code: str) -> re.Pattern:
+    """One pattern for every word of an allergy. An allergy menus don't label ("melon", "mustard")
+    is looked for by its own name anywhere in the text, like the never-eat list ("Watermelon",
+    "Popcorn" for corn, "Strawberries" for berry), so the checker enforces it by itself. Blocking a
+    safe dish by mistake is far better than serving an unsafe one."""
+    if code in ALLERGY_WORDS:
+        parts = []
+        for word in ALLERGY_WORDS[code]:
+            w = re.escape(word)
+            parts.append(w if word in _ANYWHERE else rf"\b{w}(?:s|es)?\b" if word in _WHOLE else rf"\b{w}")
+        return re.compile("|".join(parts))
+    name = _fold(code.replace("_", " ")).strip()
+    last = name.split()[-1] if name.split() else ""
+    roots = {_root(name)} | ({_root(last)} if last.isalpha() and len(last) >= 3 else set())
+    return re.compile("|".join(re.escape(r) if len(r) >= 3 else rf"\b{re.escape(r)}\b" for r in roots if r)
+                      or r"(?!x)x")
 # Allergy words people use, in the order they're looked for -> the name the app saves. "Severe peanut
 # allergy", "I'm allergic to peanuts" and "celiac" all become something the checker enforces.
 ALLERGY_TERMS = [
@@ -227,22 +362,33 @@ ALLERGY_TERMS = [
     (r"shellfish|shrimps?|prawns?|crabs?|lobsters?|scallops?|clams?|mussels?|oysters?|crustaceans?", "shellfish"),
     (r"fish", "fish"),
 ]
-_ALLERGY_FILLER = {"i", "im", "i'm", "am", "have", "has", "a", "an", "my", "to", "of", "and", "severe", "severely",
-                   "mild", "very", "allergy", "allergies", "allergic", "intolerant", "intolerance", "anaphylactic",
-                   "anaphylaxis", "sensitive", "sensitivity", "life", "threatening", "life-threatening", "reaction"}
+_ALLERGY_FILLER = {"i", "im", "i'm", "am", "have", "has", "a", "an", "my", "to", "of", "and", "or", "the", "any",
+                   "all", "no", "not", "please", "avoid", "avoids", "avoiding", "without", "with", "from", "can't",
+                   "cant", "cannot", "don't", "dont", "eat", "food", "foods", "anything", "stuff", "contains",
+                   "containing", "severe", "severely", "mild", "very", "allergy", "allergies", "allergic",
+                   "intolerant", "intolerance", "anaphylactic", "anaphylaxis", "sensitive", "sensitivity", "life",
+                   "threatening", "life-threatening", "reaction"}
+# Words that only say which form of an allergen it is ("peanut oil", "soy sauce", "nut-free"): never an
+# allergy of their own. Any other word next to an allergen is kept ("peanut kiwi allergy" -> kiwi too).
+_ALLERGEN_FORMS = {"oil", "oils", "seed", "seeds", "sauce", "sauces", "protein", "proteins", "free", "butter", "flour",
+                   "milk", "paste", "powder", "meal", "extract", "product", "products", "based", "derived", "trace",
+                   "traces", "cross", "contamination", "contact", "spread", "allergen", "allergens", "family"}
 
 
 def allergy_names(phrase: str) -> tuple[list[str], str]:
     """(allergy names the checker knows, any other food left in the phrase). "severe peanut allergy"
     -> (["peanuts"], ""); "allergic to mustard" -> ([], "mustard")."""
-    text, found = " " + str(phrase).lower().replace("_", " ") + " ", []
+    text, found = " " + _fold(phrase).replace("_", " ") + " ", []
     for pattern, name in ALLERGY_TERMS:
         regex = re.compile(rf"\b(?:{pattern})\b")
         if regex.search(text):
             if name not in found:
                 found.append(name)
             text = regex.sub(" ", text)  # "tree nuts" isn't also "nuts"
-    words = [w for w in re.findall(r"[a-z][a-z'-]*", text) if w not in _ALLERGY_FILLER]
+    words = [w for w in re.findall(r"[a-z][a-z']*", text) if w not in _ALLERGY_FILLER]
+    food = [w for w in words if w not in _ALLERGEN_FORMS]
+    if found or food:  # "mustard seed" is mustard; "peanut oil" is peanuts
+        words = food
     return found, " ".join(words)
 
 
@@ -260,6 +406,37 @@ def write_prefs(prefs: dict) -> None:
     storage.current().save_prefs(prefs)
 
 
+def reread_memory() -> None:
+    """Before a read-modify-write: get the account's latest copy (stores without a server have none)."""
+    refresh = getattr(storage.current(), "refresh", None)
+    if refresh:
+        refresh(force=True)
+
+
+def changed_elsewhere(base: dict, theirs: dict) -> list[str]:
+    """Memory keys saved differently since the form was shown (by another tab, device, or the agent)."""
+    return [k for k in theirs if k in base and theirs.get(k) != base.get(k)]
+
+
+def merge_form(base: dict, mine: dict, theirs: dict) -> dict:
+    """The memory form's values merged with changes saved elsewhere since the form was shown.
+
+    base: what the form showed; mine: what was submitted; theirs: what's saved now. A list keeps
+    entries added elsewhere and drops only what the user removed here; any other value the user
+    changed here wins, otherwise the saved one stays. So a tab left open can't erase a new allergy."""
+    out = dict(theirs)
+    for key, value in mine.items():
+        before, now = base.get(key), theirs.get(key)
+        if isinstance(value, list) and isinstance(before, list) and isinstance(now, list):
+            removed = {str(v).lower() for v in before} - {str(v).lower() for v in value}
+            merged = [v for v in now if str(v).lower() not in removed]
+            merged += [v for v in value if str(v).lower() not in {str(m).lower() for m in merged}]
+            out[key] = merged
+        elif value != before or key not in theirs:
+            out[key] = value
+    return out
+
+
 def allergen_codes(allergies: list[str]) -> set[str]:
     codes = set()
     for a in allergies or []:
@@ -272,15 +449,29 @@ def normalize_hall(hall: str) -> str:
     return locations.get(hall).key
 
 
+def _place(name: str) -> str:
+    """normalize_hall, except a saved place that isn't on Nutrislice today keeps its name (its menu is then
+    reported as probably closed, see _menu) instead of failing the whole lookup."""
+    try:
+        return normalize_hall(name)
+    except ValueError:
+        if name in (read_prefs().get("extra_locations") or []):
+            return name
+        raise
+
+
 def considered(prefs: dict | None = None, extra: list[str] | None = None) -> list[str]:
     """Where to look by default: East, West, the user's extra_locations, and any `extra` named now."""
     prefs = prefs if prefs is not None else read_prefs()
     out = list(HALLS)
-    for name in list(prefs.get("extra_locations") or []) + list(extra or []):
+    saved = list(prefs.get("extra_locations") or [])
+    for name in saved + list(extra or []):
         try:
             key = normalize_hall(name)
         except ValueError:
-            continue  # a place that no longer exists on Nutrislice
+            if name not in saved:
+                continue
+            key = name  # saved, but not on Nutrislice today (closed for a break): say so, don't hide it
         if key not in out:
             out.append(key)
     return out
@@ -307,12 +498,15 @@ def _text(item: dict) -> str:
 def allergy_conflicts(item: dict, codes: set[str]) -> list[str]:
     """Allergens in an item that the user must avoid (icons first, then keywords)."""
     hits = set(item["allergens"]) & codes
-    text = _text(item)
-    gluten_free = "avoiding_gluten" in item.get("tags", [])  # Nutrislice's own "avoiding gluten" label
+    text = _fold(_text(item))
+    tags = set(item.get("tags", []))
     for code in codes:
-        if gluten_free and code in ("gluten", "wheat"):
+        if "avoiding_gluten" in tags and code in ("gluten", "wheat"):  # Nutrislice's own labels
             continue
-        if any(re.search(rf"\b{w}(s|es)?\b", text) for w in ALLERGY_WORDS.get(code, [])):
+        if "vegan" in tags and code in ("milk", "egg"):
+            continue
+        lookalikes = _LOOKALIKES.get(code)
+        if code and _allergy_regex(code).search(lookalikes.sub(" ", text) if lookalikes else text):
             hits.add(code)
     return sorted(hits)
 
@@ -328,9 +522,8 @@ def diet_ok(item: dict, diet: list[str]) -> bool:
             return False
         if d == "pescatarian" and not ("vegetarian" in tags or {"fish", "shellfish"} & set(item["allergens"])):
             return False
-        if d in ("gluten_free", "gluten-free", "gluten free") and (
-                {"gluten", "wheat"} & set(item["allergens"])):
-            return False
+        if d in ("gluten_free", "gluten-free", "gluten free") and allergy_conflicts(item, {"gluten", "wheat"}):
+            return False  # the labels and the ingredient safety net, like a gluten allergy
     return True
 
 
@@ -448,9 +641,10 @@ DIET_NAMES = {"veggie": "vegetarian", "plant based": "vegan", "plant-based": "ve
 MAX_ENTRIES, MAX_CHARS, MAX_NOTE_CHARS = 50, 80, 300
 
 
-def _as_list(value, key: str = "") -> list[str]:
-    """A list preference as a list of strings. "peanuts and shellfish" is two allergies; a note
-    is never split."""
+def _as_list(value, key: str = "", split: bool = True) -> list[str]:
+    """A list preference as a list of strings. Typed text is split: "peanuts and shellfish" is two
+    allergies, "mushrooms, olives" two foods. With split=False, entries of a list are kept whole, so a
+    menu name like "Rice, Brown" (from Never again) stays one entry. A note is never split."""
     if value is None:
         return []
     if isinstance(value, dict):
@@ -460,10 +654,37 @@ def _as_list(value, key: str = "") -> list[str]:
     for entry in raw:
         if entry in (None, "") or isinstance(entry, (dict, list)):
             continue
-        parts = [str(entry)] if key == "notes" else re.split(r"[,;]", str(entry))
-        if key in ("allergies", "diet"):
-            parts = [p for part in parts for p in re.split(r"\s+(?:and|&)\s+|\s*[&/]\s*", part)]
+        text = " ".join(str(entry).split())[:2000]  # one space between words: splitting stays fast
+        if key == "notes":
+            parts = [text]
+        elif key in ("allergies", "diet"):  # never a comma in one of these
+            parts = re.split(r"[,;]|\s+(?:and|or|&)\s+|\s*[&/]\s*", text)
+        else:
+            parts = re.split(r"[,;]", text) if split or isinstance(value, str) else [text]
         out += [p.strip() for p in parts if p.strip()]
+    return out
+
+
+def split_entries(text: str, saved: list[str]) -> list[str]:
+    """A memory form box ("fries, Rice, Brown") as entries. Pieces between commas are joined back only
+    when together they are exactly a saved entry with a comma ("Rice, Brown"), never across two entries."""
+    def norm(value: str) -> str:
+        return ", ".join(p.strip() for p in str(value).split(",")).lower()
+    whole = {norm(e): e for e in saved or [] if "," in e}
+    longest = max((e.count(",") + 1 for e in whole.values()), default=1)
+    pieces = [p.strip() for p in str(text or "").split(",")]
+    out, i = [], 0
+    while i < len(pieces):
+        for n in range(min(longest, len(pieces) - i), 1, -1):
+            joined = norm(", ".join(pieces[i:i + n]))
+            if joined in whole:
+                out.append(whole[joined])
+                i += n
+                break
+        else:
+            if pieces[i]:
+                out.append(pieces[i])
+            i += 1
     return out
 
 
@@ -495,7 +716,7 @@ def _list_entry(key: str, raw, strict: bool) -> str:
     low = text.lower()
     if key == "allergies":
         found, rest = allergy_names(low)
-        if found:  # a short leftover is another food ("peanut, kiwi allergy"); a long one is just words
+        if found:  # a short leftover is another food ("peanut kiwi allergy"); a long one is just words
             return found + ([rest] if rest and len(rest.split()) <= 2 else [])
         if not rest:
             if strict:
@@ -521,15 +742,16 @@ def _list_entry(key: str, raw, strict: bool) -> str:
     return text
 
 
-def _clean_pref(key: str, value, strict: bool = True):
+def _clean_pref(key: str, value, strict: bool = True, split: bool | None = None):
     """A memory value in the form the app can show and the checker can use.
 
     strict (saving): raise ValueError for anything unusable. Not strict (reading what's already
-    saved): repair what can be repaired, drop or reset the rest, never raise."""
+    saved): repair what can be repaired, drop or reset the rest, never raise. split: whether entries of
+    a list may hold several foods ("a, b"); by default only when saving."""
     if key in LIST_PREFS:
         out = []
         try:
-            entries = _as_list(value, key)
+            entries = _as_list(value, key, strict if split is None else split)
         except ValueError:
             if strict:
                 raise
@@ -573,10 +795,12 @@ def _clean_pref(key: str, value, strict: bool = True):
     return value
 
 
-def update_prefs(changes: dict | None = None, reason: str = "", remove: dict | None = None) -> dict:
+def update_prefs(changes: dict | None = None, reason: str = "", remove: dict | None = None,
+                 exact: bool = False) -> dict:
     """Save lasting preferences. Lists (allergies, never_eat, favorites, ...) are added to, never
     replaced, so saving one new allergy can't wipe the others; `remove` takes entries out.
-    meals_to_plan and cheat_days are set as a whole."""
+    meals_to_plan and cheat_days are set as a whole. exact: each list entry is one thing, even with a
+    comma in it (a menu name from the Love it / Never again buttons)."""
     changes = {PREF_ALIASES.get(k, k): v for k, v in (changes or {}).items()}
     remove = {PREF_ALIASES.get(k, k): v for k, v in (remove or {}).items()}
     unknown = sorted((set(changes) | set(remove)) - EDITABLE_PREFS)
@@ -584,22 +808,26 @@ def update_prefs(changes: dict | None = None, reason: str = "", remove: dict | N
         return {"status": "error", "error": f"Unknown preference keys {unknown}. "
                                             f"Allowed: {sorted(EDITABLE_PREFS)}",
                 "summary": "Rejected unknown preference keys."}
+    reread_memory()  # another tab or device may have saved since this one last read
     prefs, updated, problems, notes = read_prefs(), {}, [], []
     for key, value in changes.items():
         try:
-            new = _clean_pref(key, value)
+            new = _clean_pref(key, value, split=not exact)
         except ValueError as exc:
             problems.append(f"{key}: {exc}")
             continue
         if key == "allergies":
             unreadable = [a for a in new if a not in KNOWN_ALLERGIES]
-            if unreadable:  # menus don't label it, so also block dishes that name it
-                updated["never_eat"] = _clean_pref("never_eat", list(updated.get("never_eat", prefs["never_eat"]))
-                                                   + unreadable, strict=False)
-                notes.append(f"Menus don't label {', '.join(unreadable)}, so DineWolfie also blocks dishes that "
+            if unreadable:  # the checker looks for it by name (allergy_conflicts), since menus don't label it
+                notes.append(f"Menus don't label {', '.join(unreadable)}, so DineWolfie blocks dishes that "
                              "mention it by name or ingredient. Tell the user to double-check with dining staff.")
         if key in LIST_PREFS and key not in SET_LISTS:  # add, keeping what's there
-            new = _clean_pref(key, list(updated.get(key, prefs.get(key) or [])) + new, strict=False)
+            merged = _clean_pref(key, list(updated.get(key, prefs.get(key) or [])) + new, strict=False)
+            if any(e.lower() not in {m.lower() for m in merged} for e in new):
+                problems.append(f"{key} is full ({MAX_ENTRIES} entries); remove some first (the user can, in "
+                                "the memory form)")
+                continue
+            new = merged
         updated[key] = new
     for key, value in remove.items():
         if key not in LIST_PREFS:
@@ -608,6 +836,10 @@ def update_prefs(changes: dict | None = None, reason: str = "", remove: dict | N
         if key == "allergies":
             problems.append("allergies can only be removed by the user in the memory form (sidebar), so a "
                             "misunderstanding can never unblock an allergen")
+            continue
+        if key == "diet" and "gluten_free" in _clean_pref("diet", value, strict=False):
+            problems.append("a gluten-free diet works like an allergy, so only the user can remove it, in the "
+                            "memory form (sidebar)")
             continue
         try:
             wanted = _clean_pref(key, value, strict=False)
@@ -640,10 +872,13 @@ def _known_place(name: str) -> str:
         return name
 
 
-def get_meal_history(days: int = 3) -> dict:
-    history = read_history()
-    cutoff = (config.today() - timedelta(days=int(days or 3))).isoformat()
-    recent = [h for h in history if h.get("date", "") >= cutoff]
+def get_meal_history(days: int = 3, date: str | None = None) -> dict:
+    """Plans from the `days` days before `date` (default today), oldest first. Not that day itself
+    (its earlier plan is being replaced) and not later days (plans queued ahead)."""
+    until = resolve_date(date)
+    cutoff = (until - timedelta(days=_int(days, 3, 1, 14))).isoformat()
+    recent = sorted((h for h in read_history() if isinstance(h, dict)
+                     and cutoff <= str(h.get("date", "")) < until.isoformat()), key=lambda h: h["date"])
     slim = [{"date": h["date"], "goal": h.get("goal", ""),
              "meals": {m["meal"]: [i["name"] for i in m["items"]] for m in h["plan"]["meals"]}}
             for h in recent[-5:]]
@@ -653,13 +888,13 @@ def get_meal_history(days: int = 3) -> dict:
 
 def menu_items(hall: str, meal: str, date: str | None = None) -> list[dict]:
     """Full items for one hall + meal, in Nutrislice's order (for the menu browser)."""
-    items, _ = _menu(normalize_hall(hall), normalize_meal(meal), resolve_date(date))
+    items, _ = _menu(_place(hall), normalize_meal(meal), resolve_date(date))
     return items
 
 
 def get_menu(hall: str, meal: str, date: str | None = None) -> dict:
     day = resolve_date(date)
-    hall, meal = normalize_hall(hall), normalize_meal(meal)
+    hall, meal = _place(hall), normalize_meal(meal)
     items, meta = _menu(hall, meal, day)
     label = f"{hall} {meal.replace('_', ' ')} on {day.isoformat()}"
     if meta["status"] == "error":
@@ -694,7 +929,7 @@ def search_items(meal: str, hall: str = "any", date: str | None = None,
     meal = normalize_meal(meal)
     prefs = read_prefs() if apply_my_prefs else dict(DEFAULT_PREFS)
     halls = (considered(read_prefs()) if (hall or "any").lower() in ("any", "both", "all")
-             else [normalize_hall(hall)])
+             else [_place(hall)])
     codes = allergen_codes(list(exclude_allergens or []) + list(prefs["allergies"]))
     diet = list(require_tags or []) + list(prefs["diet"])
     dislikes = list(exclude_keywords or []) + list(prefs["dislikes"])
@@ -729,7 +964,7 @@ def search_items(meal: str, hall: str = "any", date: str | None = None,
     kept.sort(key=SORTS.get(sort_by, SORTS["protein_per_calorie"]))
     if favorites:  # favorites float to the top, otherwise keep the chosen order
         kept.sort(key=lambda i: not i.get("favorite"))
-    limit = max(1, min(int(limit or 12), 40))
+    limit = _int(limit, 12, 1, 40)
     by_station: dict[str, int] = {}
     for item in kept:
         by_station[f"{item['hall']} / {item['station']}"] = by_station.get(f"{item['hall']} / {item['station']}", 0) + 1
@@ -952,13 +1187,14 @@ def _totals(rows: list[dict], day: date) -> dict:
 
 
 def _servings(value) -> float | None:
-    """1, 2.5 or "2" -> a number (missing -> 1); "two" -> None."""
+    """1, 2.5 or "2" -> a number (missing -> 1); "two", "nan" or "inf" -> None."""
     if value in (None, ""):
         return 1.0
     try:
-        return float(value) or 1.0
-    except (TypeError, ValueError):
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
         return None
+    return (number or 1.0) if math.isfinite(number) else None
 
 
 MEAL_SHAPE = '{"meal": "lunch", "hall": "East", "items": [{"id": "E123", "servings": 1}], "reason": "..."}'
@@ -972,6 +1208,15 @@ def _listed(value) -> list:
     return value if isinstance(value, list) else [value]
 
 
+def _plain(value) -> str:
+    """A text field as the model meant it: None -> "", a list -> its parts joined."""
+    if value is None or isinstance(value, dict):
+        return ""
+    if isinstance(value, (list, tuple)):
+        return " ".join(_plain(v) for v in value).strip()
+    return str(value).strip()
+
+
 def _texts(value) -> list[str]:
     return [str(v).strip() for v in _listed(value) if str(v).strip()]
 
@@ -983,6 +1228,9 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
         day = resolve_date(plan.get("date"))
     except ValueError:
         return None, [f"Bad date {plan.get('date')!r}; use YYYY-MM-DD."]
+    locked = _plan_date.get()
+    if locked and day.isoformat() != locked:
+        return None, [f"This plan is for {locked}: submit it with date {locked}, using that day's menus."]
     prefs = read_prefs()
     codes = allergen_codes(prefs["allergies"])
     meals_out, all_entries = [], []
@@ -1051,10 +1299,10 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
                 i["id"].upper(): i for i in _menu(alt_hall, meal, day)[0]}
             alt_items = check_items(alt.get("items", []), alt_hall, meal, alt_menu, f"{meal} swap {n}")
             if alt_items:
-                alternatives.append({"hall": alt_hall, "items": alt_items, "note": alt.get("note", ""),
+                alternatives.append({"hall": alt_hall, "items": alt_items, "note": _plain(alt.get("note")),
                                      "totals": _totals(alt_items, day)})
         meals_out.append({"meal": meal, "hall": hall, "items": items_out,
-                          "reason": meal_plan.get("reason", ""), "totals": _totals(items_out, day),
+                          "reason": _plain(meal_plan.get("reason")), "totals": _totals(items_out, day),
                           "alternatives": alternatives})
     if not meals_out:
         problems.append("The plan has no meals.")
@@ -1066,9 +1314,9 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
     goal = prefs.get("daily_protein_goal_g") if full_day else None
     result = {
         "date": day.isoformat(),
-        "goal": plan.get("goal", ""),
-        "headline": plan.get("headline", ""),
-        "message": str(plan.get("message") or "").strip(),
+        "goal": _plain(plan.get("goal")),
+        "headline": _plain(plan.get("headline")),
+        "message": _plain(plan.get("message")),
         "meals": meals_out,
         "totals": totals["totals"],
         "items_missing_nutrition": totals["items_missing_nutrition"],
@@ -1113,6 +1361,7 @@ def read_history() -> list[dict]:
 def append_history(plan: dict) -> None:
     """Remember an accepted plan, one per date: a newer plan for the same day (queued again, or
     changed with a follow-up) replaces the older one."""
+    reread_memory()
     history = [h for h in read_history() if not isinstance(h, dict) or h.get("date") != plan["date"]]
     history.append({"date": plan["date"], "goal": plan.get("goal", ""), "plan": plan})
     storage.current().save_history(history)
