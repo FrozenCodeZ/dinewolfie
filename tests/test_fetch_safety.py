@@ -1,6 +1,5 @@
 """Nutrislice must not be contacted unless live fetching is switched on, and must never be
 contacted again after a refusal or rate limit (no network: requests.get is replaced)."""
-from datetime import date
 
 import pytest
 
@@ -49,7 +48,7 @@ def test_no_request_when_live_fetch_is_off(calls, monkeypatch):
         fetch_menu._get_json("https://example.invalid/menu")
     station = Station("West", 1, "dine-in-grill", "Grill")
     with pytest.raises(FetchError):
-        fetch_menu.fetch_station_week(station, date.today())
+        fetch_menu.fetch_station_week(station, config.today())
     assert calls == []
 
 
@@ -72,6 +71,6 @@ def test_hall_fetch_stops_after_first_rate_limit(calls, monkeypatch):
     stations = [Station("West", i, f"station-{i}", f"Station {i}") for i in range(5)]
     monkeypatch.setattr(fetch_menu, "list_stations", lambda hall, offline=False: stations)
     monkeypatch.setattr(fetch_menu.requests, "get", lambda url, **kw: calls.append(url) or FakeResponse(429))
-    result = fetch_menu.fetch_hall_day("West", date.today())
+    result = fetch_menu.fetch_hall_day("West", config.today())
     assert len(calls) == 1, "only the first station may be requested"
     assert len(result["errors"]) == 5

@@ -102,7 +102,7 @@ class SheetStore:
             history_json = json.dumps(history)
         self._history = history
         row = [self.user_id, self.name, json.dumps(self._prefs or {}), history_json,
-               datetime.now().isoformat(timespec="seconds")]
+               config.now().isoformat(timespec="seconds")]
         if self._row is None:
             self.ws.append_row(row, value_input_option="RAW")
             cell = self.ws.find(self.user_id, in_column=1)
@@ -129,19 +129,25 @@ class SupabaseStore:
     """One row per account in public.dinewolfie_memory (see supabase/schema.sql).
 
     `client` is that person's signed-in Supabase client, so Row Level Security only ever lets it
-    touch their own row. The row is read once and cached; every save writes the whole row back.
+    touch their own row. The row is read once and cached; a save writes only the part that changed
+    (preferences, or past plans), so a small change doesn't resend every saved plan.
     """
     kind = "supabase"
     TABLE = "dinewolfie_memory"
 
-    def __init__(self, client, user_id: str):
-        self.client, self.user_id = client, str(user_id)
+    def __init__(self, client, user_id: str, account=None):
+        self.client, self.user_id, self.account = client, str(user_id), account
         self._prefs: dict | None = None
         self._history: list[dict] = []
         self._load()
 
     def _fresh(self):
-        self.client.auth.get_session()  # renews the sign-in if it has expired (tokens last an hour)
+        """The table, after making sure the sign-in is still valid (access tokens last an hour)."""
+        if self.account is not None:
+            from src import accounts
+            accounts.ensure_fresh(self.client, self.account)  # shares one sign-in between tabs
+        else:
+            self.client.auth.get_session()
         return self.client.table(self.TABLE)
 
     def _load(self) -> None:
@@ -150,9 +156,8 @@ class SupabaseStore:
             self._prefs = rows[0].get("prefs") or None
             self._history = rows[0].get("history") or []
 
-    def _write(self) -> None:
-        self._history = self._history[-HISTORY_LIMIT:]
-        row = {"user_id": self.user_id, "prefs": self._prefs or {}, "history": self._history,
+    def _write(self, **columns) -> None:
+        row = {"user_id": self.user_id, **columns,
                "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         try:
             self._fresh().upsert(row, on_conflict="user_id").execute()
@@ -162,16 +167,17 @@ class SupabaseStore:
     def load_prefs(self) -> dict | None:
         return dict(self._prefs) if self._prefs is not None else None
 
+    # The copy in memory is updated first, so this tab keeps working even if the save fails.
     def save_prefs(self, prefs: dict) -> None:
         self._prefs = dict(prefs)
-        self._write()
+        self._write(prefs=self._prefs)
 
     def load_history(self) -> list[dict]:
         return list(self._history)
 
     def save_history(self, history: list[dict]) -> None:
-        self._history = list(history)
-        self._write()
+        self._history = list(history)[-HISTORY_LIMIT:]
+        self._write(history=self._history)
 
 
 def open_worksheet(service_account_info: dict, sheet_id: str, tab: str = "users"):

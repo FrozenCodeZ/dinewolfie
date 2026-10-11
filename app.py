@@ -15,7 +15,7 @@ import streamlit as st
 import config
 from src import access, accounts, locations, notify, storage
 from src import tools as T
-from src.agent import Engine, default_goal, run_agent
+from src.agent import MEAL_NAMES, Engine, default_goal, run_agent
 from src.groq_agent import PROVIDERS, model_settings
 
 st.set_page_config(page_title="DineWolfie", page_icon="🐺", layout="wide")
@@ -97,6 +97,8 @@ h1, h2, h3, .dw-word { font-family: 'Bricolage Grotesque', sans-serif; letter-sp
 .hall { font-family: 'Atkinson Hyperlegible', sans-serif; font-size: .78rem; font-weight: 700;
   color: #fff; border-radius: 999px; padding: .1rem .6rem; background: var(--muted); white-space: nowrap; }
 .hall-East { background: var(--navy); } .hall-West { background: var(--red); }
+.hall-other { background: #5B4B8A; }
+.pay { display: block; font-size: .72rem; color: var(--amber); font-weight: 700; margin: -.2rem 0 .35rem; }
 .food { margin: .45rem 0; }
 .food-name { font-weight: 700; color: var(--ink); line-height: 1.25; }
 .food-meta { font-size: .8rem; color: var(--muted); }
@@ -158,8 +160,12 @@ TOOL_LABELS = {
     "scout_meal": "Scouted both halls",
     "lookup_nutrition": "Looked up nutrition on the web",
 }
-MEAL_LABEL = {"breakfast": "Breakfast", "brunch": "Brunch", "lunch": "Lunch", "dinner": "Dinner",
-              "late_night": "Late night"}
+def pays_with(hall: str) -> str:
+    """"meal swipe" or "dining dollars" (empty if the place isn't known right now)."""
+    try:
+        return locations.get(hall).paid_with
+    except ValueError:
+        return ""
 
 for key, default in {"events": [], "plan": None, "reply": "", "resume": None, "resume_engine": None,
                      "error": None, "stats": None, "goal": ""}.items():
@@ -182,6 +188,7 @@ config.MODEL = secret("DINEWOLFIE_MODEL") or config.MODEL
 config.GROQ_MODEL = secret("DINEWOLFIE_GROQ_MODEL") or config.GROQ_MODEL
 config.GEMINI_MODEL = secret("DINEWOLFIE_GEMINI_MODEL") or config.GEMINI_MODEL
 config.CEREBRAS_MODEL = secret("DINEWOLFIE_CEREBRAS_MODEL") or config.CEREBRAS_MODEL
+config.APP_URL = secret("app_url") or config.APP_URL  # where tapping a phone notification goes
 
 # Streamlit Community Cloud runs apps from /mount/src/<repo>; `hosted = true` in secrets also works.
 HOSTED = bool(secret("hosted", False)) or str(config.ROOT).replace("\\", "/").startswith("/mount/src")
@@ -205,6 +212,12 @@ def supabase_client():
 def remember_cookie(token: str | None) -> None:
     """Save (or with None, delete) the stay-signed-in cookie on the next page render."""
     st.session_state.cookie_pending = token or ""
+    st.session_state.cookie_token = token or None
+
+
+def forget_account() -> None:
+    for key in ("account", "sb_client", "store", "store_key", "store_error"):
+        st.session_state.pop(key, None)
 
 
 GOOGLE_SIGNED_IN = bool(GOOGLE_ENABLED and st.user.is_logged_in)
@@ -216,18 +229,31 @@ if SUPABASE_ENABLED and ACCOUNT is None and not st.session_state.get("restore_tr
     if saved:
         try:
             ACCOUNT = st.session_state.account = accounts.restore(supabase_client(), saved)
-            remember_cookie(ACCOUNT.refresh_token)  # Supabase hands out a new token each time
-        except Exception:
-            remember_cookie(None)  # expired or revoked: forget it
-elif ACCOUNT is not None and ACCOUNT.refresh_token and st.session_state.get("remember", True):
-    # Supabase renews the sign-in about hourly; keep the cookie in step with it.
+            st.session_state.cookie_token = saved
+        except accounts.AccountError as exc:
+            if exc.expired:
+                remember_cookie(None)  # expired or revoked: forget it
+            else:  # the account service didn't answer: keep the cookie and try again on the next reload
+                st.session_state.store_error = ("Couldn't reach the account service to sign you back in. "
+                                                "Reload the page in a minute.")
+        except Exception:  # e.g. the account service isn't set up right: stay a guest, keep the cookie
+            pass
+elif ACCOUNT is not None:
+    # Access tokens last an hour. Renew when needed, sharing the newest sign-in with this browser's
+    # other tabs (accounts.py explains why).
     try:
-        session = supabase_client().auth.get_session()
-        if session and session.refresh_token != ACCOUNT.refresh_token:
-            ACCOUNT.refresh_token = session.refresh_token
-            remember_cookie(session.refresh_token)
+        accounts.ensure_fresh(supabase_client(), ACCOUNT)
+    except accounts.AccountError as exc:
+        if exc.expired:  # signed out on purpose elsewhere, or revoked
+            forget_account()
+            ACCOUNT = None
+            remember_cookie(None)
+            st.session_state.store_error = "Your sign-in expired. Sign in again to keep saving your memory."
     except Exception:
-        pass
+        pass  # network trouble: try again on the next run
+if ACCOUNT is not None and ACCOUNT.refresh_token and st.session_state.get("remember", True) \
+        and ACCOUNT.refresh_token != st.session_state.get("cookie_token"):
+    remember_cookie(ACCOUNT.refresh_token)  # keep the cookie on this sign-in's newest token
 SIGNED_IN = GOOGLE_SIGNED_IN or ACCOUNT is not None
 if GOOGLE_SIGNED_IN:
     USER_EMAIL, USER_NAME = (st.user.get("email") or "").lower(), st.user.get("name") or ""
@@ -258,7 +284,7 @@ def choose_store():
         key = f"supabase:{ACCOUNT.user_id}"
         if st.session_state.get("store_key") != key:
             try:
-                st.session_state.store = storage.SupabaseStore(supabase_client(), ACCOUNT.user_id)
+                st.session_state.store = storage.SupabaseStore(supabase_client(), ACCOUNT.user_id, account=ACCOUNT)
                 st.session_state.pop("store_error", None)
             except Exception as exc:  # database paused or misconfigured: keep working, just don't save
                 st.session_state.store = storage.MemoryStore(example_prefs())
@@ -304,7 +330,7 @@ def preload_menus(day: str) -> bool:
 
 
 if config.LIVE_FETCH and config.DATA_MODE == "live":
-    preload_menus(date.today().isoformat())
+    preload_menus(config.today().isoformat())
 
 STORE = choose_store()
 storage.use(STORE)
@@ -442,9 +468,12 @@ def tray_html(plan: dict) -> str:
                          f'<div class="food-meta">{e(alt.get("note", ""))} · {at.get("protein_g", 0)} g protein, '
                          f'{at.get("calories", 0)} kcal</div></div>')
         t = meal.get("totals") or {}
+        chip = meal["hall"] if meal["hall"] in config.HALLS else "other"
+        pay = ('<span class="pay">Paid with dining dollars, not a meal swipe</span>'
+               if pays_with(meal["hall"]) == "dining dollars" else "")
         wells.append(
-            f'<div class="well"><div class="well-title">{e(MEAL_LABEL.get(meal["meal"], meal["meal"]))}'
-            f'<span class="hall hall-{e(meal["hall"])}">{e(meal["hall"])}</span></div>{"".join(foods)}'
+            f'<div class="well"><div class="well-title">{e(MEAL_NAMES.get(meal["meal"], meal["meal"]))}'
+            f'<span class="hall hall-{chip}">{e(meal["hall"])}</span></div>{pay}{"".join(foods)}'
             f'<div class="meal-tot">{t.get("protein_g", 0)} g protein · {t.get("calories", 0)} kcal</div>'
             f'<div class="why">{e(meal.get("reason", ""))}</div>{"".join(swaps)}</div>')
 
@@ -480,9 +509,8 @@ def tray_html(plan: dict) -> str:
 # Sidebar: memory, data source, demo switches
 # ---------------------------------------------------------------------------------------
 def sign_out_account() -> None:
-    accounts.sign_out(supabase_client())
-    for key in ("account", "sb_client", "store", "store_key", "store_error"):
-        st.session_state.pop(key, None)
+    accounts.sign_out(supabase_client(), st.session_state.get("account"))  # this browser only
+    forget_account()
     remember_cookie(None)
 
 
@@ -510,6 +538,9 @@ def account_forms() -> None:
         email = st.text_input("Email", key="su_email")
         password = st.text_input(f"Password ({accounts.MIN_PASSWORD}+ characters)", type="password",
                                  key="su_password")
+        keep_new = st.checkbox("Keep me signed in on this device", value=True, key="su_keep",
+                               help=f"Remembers you for {accounts.REMEMBER_DAYS} days in this browser. Untick on a "
+                                    "shared computer.")
         if st.form_submit_button("Create account", width="stretch"):
             try:
                 account = accounts.sign_up(supabase_client(), email, password)
@@ -520,7 +551,9 @@ def account_forms() -> None:
                     st.success("Almost there: open the link we just emailed you, then sign in here.")
                 else:
                     st.session_state.account = account
-                    remember_cookie(account.refresh_token)
+                    st.session_state.remember = keep_new
+                    if keep_new:
+                        remember_cookie(account.refresh_token)
                     st.rerun()
 
 
@@ -591,11 +624,15 @@ with st.sidebar:
                                   "slower and cost more." + (" Paste your own key to choose." if locked else ""))
         if locked:
             model = default_model
+        # Thorough uses about four times the tokens, so on the owner's key it's Fast only too.
         speed = st.radio("Speed", ["Fast", "Thorough"], horizontal=True, key="speed",
-                         index=0 if config.MODE != "thorough" else 1,
+                         index=0 if config.MODE != "thorough" or locked else 1, disabled=locked,
                          help="Fast: the app gathers your memory and both halls' menus first, so the AI usually "
                               "decides in one step (about 10 s). Thorough: the AI does every lookup itself, step "
-                              "by step (slower, but you see more of its reasoning).")
+                              "by step (slower, but you see more of its reasoning)."
+                              + (" Paste your own key to use Thorough." if locked else ""))
+        if locked:
+            speed = "Fast"
         ENGINE = Engine(provider, api_key, model, speed.lower())
 
     with st.expander("Web nutrition lookup (Tavily)"):
@@ -611,20 +648,27 @@ with st.sidebar:
     st.caption(MEMORY_WHERE + " The agent reads it before every plan, and updates it when you tell it "
                "something lasting, like a new allergy.")
     prefs = T.read_prefs()
+
+    def with_saved(options: list, saved: list) -> list:
+        """The usual choices plus anything already saved, so saving the form never drops a value
+        the agent stored (an allergy like "mustard", a place that's closed today)."""
+        return list(options) + [v for v in saved if v not in options]
+
     with st.form("prefs"):
         name = st.text_input("Name", prefs.get("name") or "")
-        diet = st.multiselect("Diet", ["vegetarian", "vegan", "halal", "pescatarian", "gluten_free"],
-                              [d for d in prefs.get("diet", []) if d in
-                               ["vegetarian", "vegan", "halal", "pescatarian", "gluten_free"]])
-        allergy_opts = ["milk", "egg", "peanuts", "tree_nuts", "soy", "wheat", "gluten", "fish",
-                        "shellfish", "sesame"]
-        allergies = st.multiselect("Allergies (never served)", allergy_opts,
-                                   [a for a in prefs.get("allergies", []) if a in allergy_opts])
-        protein = st.slider("Daily protein goal (g, 0 = no goal)", 0, 300,
-                            min(300, int(prefs.get("daily_protein_goal_g") or 0)), step=5)
-        calories = st.slider("Daily calorie goal (kcal, 0 = no goal)", 0, 5000,
-                             min(5000, int(prefs.get("daily_calorie_goal") or 0)), step=50)
-        halls = ["No preference", "East", "West"]
+        saved_diet = list(prefs.get("diet") or [])
+        diet = st.multiselect("Diet", with_saved(["vegetarian", "vegan", "halal", "pescatarian", "gluten_free"],
+                                                 saved_diet), saved_diet)
+        saved_allergies = list(prefs.get("allergies") or [])
+        allergies = st.multiselect("Allergies (never served)",
+                                   with_saved(["milk", "egg", "peanuts", "tree_nuts", "soy", "wheat", "gluten",
+                                               "fish", "shellfish", "sesame"], saved_allergies), saved_allergies)
+        saved_protein = int(prefs.get("daily_protein_goal_g") or 0)
+        saved_kcal = int(prefs.get("daily_calorie_goal") or 0)
+        protein = st.slider("Daily protein goal (g, 0 = no goal)", 0, max(300, saved_protein), saved_protein, step=5)
+        calories = st.slider("Daily calorie goal (kcal, 0 = no goal)", 0, max(5000, saved_kcal), saved_kcal, step=50)
+        halls = with_saved(["No preference", "East", "West"], [prefs["favorite_hall"]] if prefs.get("favorite_hall")
+                           else [])
         fav = st.selectbox("Favorite hall", halls, halls.index(prefs.get("favorite_hall") or "No preference"))
         never_eat = st.text_input("Never eat (blacklist)", ", ".join(prefs.get("never_eat") or []),
                                   help="Comma separated. Strict, like an allergy: the checker rejects any plan "
@@ -632,17 +676,16 @@ with st.sidebar:
         dislikes = st.text_input("Dislikes (avoid if possible)", ", ".join(prefs.get("dislikes", [])))
         favorites = st.text_input("Favorites", ", ".join(prefs.get("favorites") or []),
                                   help="Comma separated. Picked first when they're on the menu.")
-        treats = st.select_slider("Treats", options=list(T.TREAT_LEVELS),
-                                  value=prefs.get("treats") if prefs.get("treats") in T.TREAT_LEVELS
-                                  else "sometimes")
-        weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        cheat_days = st.multiselect("Cheat days", weekdays,
-                                    [d for d in prefs.get("cheat_days") or [] if d in weekdays])
-        meals = st.multiselect("Meals to plan", ["breakfast", "lunch", "dinner", "late_night"],
-                               prefs.get("meals_to_plan") or ["breakfast", "lunch", "dinner"])
-        other_places = [loc.key for loc in locations.all_locations() if loc.key not in config.HALLS]
+        treats = st.select_slider("Treats", options=list(T.TREAT_LEVELS), value=prefs["treats"])
+        cheat_days = st.multiselect("Cheat days", list(T.WEEKDAYS), prefs.get("cheat_days") or [])
+        meals = st.multiselect("Meals to plan", list(config.ALL_MEALS),
+                               prefs.get("meals_to_plan") or ["breakfast", "lunch", "dinner"],
+                               format_func=lambda m: m.replace("_", " "))
+        saved_places = list(prefs.get("extra_locations") or [])
+        other_places = with_saved([loc.key for loc in locations.all_locations() if loc.key not in config.HALLS],
+                                  saved_places)
         extra_places = st.multiselect(
-            "Also eat at", other_places, [p for p in prefs.get("extra_locations") or [] if p in other_places],
+            "Also eat at", other_places, saved_places,
             help="Places besides East and West the agent may use, like Roth Cafe. These are paid with "
                  "dining dollars, not a meal swipe." if other_places else
                  "Other SBU locations appear here once the app has loaded Nutrislice's list of locations.")
@@ -705,12 +748,16 @@ EXAMPLES = {
 }
 
 
-def remember(key: str, value: str) -> None:
-    current = T.read_prefs()
-    values = list(current.get(key) or [])
-    if value.lower() not in (v.lower() for v in values):
-        values.append(value)
-    T.update_prefs({key: values}, reason="feedback button")
+def remember(key: str, value: str, done: str) -> None:
+    """Love it / Never again: add one entry to a memory list (update_prefs adds, never replaces)."""
+    try:
+        result = T.update_prefs({key: [value]}, reason="feedback button")
+    except Exception as exc:  # e.g. the account database is paused
+        result = {"status": "error", "error": str(exc)}
+    if result["status"] == "ok":
+        st.toast(done)
+    else:
+        st.error(f"Couldn't save that: {result['error']}")
 
 
 def use_example() -> None:
@@ -748,7 +795,7 @@ with tab_plan:
         st.text_area("What are you aiming for today?", key="goal_box", height=80)
     with g2:
         day_choice = st.radio("Plan for", ["Today", "Tomorrow"], horizontal=True)
-        plan_date = date.today() + timedelta(days=1 if day_choice == "Tomorrow" else 0)
+        plan_date = config.today() + timedelta(days=1 if day_choice == "Tomorrow" else 0)
         go = st.button("Plan my day", type="primary", width="stretch")
     st.pills("Or try one", list(EXAMPLES), key="example", on_change=use_example)
 
@@ -820,11 +867,9 @@ with tab_plan:
                         n1, n2, n3 = st.columns([6, 2, 3])
                         n1.markdown(f"{item['name']}")
                         if n2.button("Love it", key=f"love-{item['id']}", width="stretch"):
-                            remember("favorites", item["name"])
-                            st.toast(f"Added {item['name']} to favorites")
+                            remember("favorites", item["name"], f"Added {item['name']} to favorites")
                         if n3.button("Never again", key=f"ban-{item['id']}", width="stretch"):
-                            remember("never_eat", item["name"])
-                            st.toast(f"{item['name']} is blocked from now on")
+                            remember("never_eat", item["name"], f"{item['name']} is blocked from now on")
             if st.session_state.resume and st.session_state.resume_engine == ENGINE.provider:
                 with st.form("followup", clear_on_submit=True):
                     follow = st.text_input("Change something", placeholder="e.g. swap dinner to East, "
@@ -850,7 +895,7 @@ with tab_browse:
     st.caption("The same data the agent sees. Menu and Section use Nutrislice's own names, so you can "
                "find each item in the Nutrislice app. Nutrition is per serving.")
     b1, b2, b3 = st.columns(3)
-    b_date = b1.date_input("Date", date.today())
+    b_date = b1.date_input("Date", config.today())
     known_places = locations.all_locations()
     b_hall = b2.selectbox("Location", [loc.key for loc in known_places])
     with st.expander(f"All SBU locations DineWolfie found on Nutrislice ({len(known_places)})"):
@@ -865,7 +910,7 @@ with tab_browse:
                        "Pays with": loc.paid_with, "Includes": loc.name if loc.members else ""}
                       for loc in known_places], hide_index=True, width="stretch")
     b_meal = b3.selectbox("Meal", ["breakfast", "lunch", "dinner", "late_night"],
-                          format_func=lambda m: MEAL_LABEL[m])
+                          format_func=lambda m: MEAL_NAMES[m])
     with st.spinner("Loading menu…"):
         menu = T.get_menu(b_hall, b_meal, b_date.isoformat())
     if menu["status"] != "ok":

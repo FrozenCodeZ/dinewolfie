@@ -76,6 +76,8 @@ def _pick(rows: list[dict], protein_target: float | None, kcal_cap: float | None
             break
         if kcal_cap and kcal + row["calories"] > kcal_cap and chosen:
             continue
+        if row.get("treat") and any(c["_row"].get("treat") for c in chosen):
+            continue  # one treat is a treat; two puddings is dessert for dinner
         chosen.append({"id": row["id"], "servings": 1, "_row": row})
         protein += row["protein_g"] or 0
         kcal += row["calories"]

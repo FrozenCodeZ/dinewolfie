@@ -33,16 +33,9 @@ def meals_for(goal: str, prefs: dict) -> list[str]:
 
 
 def run_lookup(name: str, fn, args: dict) -> dict:
-    """Run one lookup and report it to the live trace, marked as done by code."""
-    A.tool_started(name, args, auto=True)
-    try:
-        result = fn(**args)
-    except Exception as exc:  # a broken lookup becomes a note in the briefing, not a crash
-        message = f"{type(exc).__name__}: {exc}"
-        A.tool_finished(name, args, None, message, auto=True)
-        return {"status": "error", "error": message}
-    A.tool_finished(name, args, result, auto=True)
-    return result
+    """Run one lookup and report it to the live trace, marked as done by code. A broken lookup
+    becomes a note in the briefing, not a crash."""
+    return A.run_tool(name, fn, args, auto=True)[0]
 
 
 def gather(plan_date: date, goal: str, per_hall: int = T.SCOUT_PER_HALL) -> str:

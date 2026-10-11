@@ -14,6 +14,7 @@ Politeness rules (see README "Data"):
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -103,15 +104,17 @@ def _read_cache(path: Path) -> dict | None:
 
 def _write_cache(path: Path, url: str, data) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
-    wrapped = {"fetched_at": datetime.now().isoformat(timespec="seconds"), "url": url, "data": data}
-    path.write_text(json.dumps(wrapped), encoding="utf-8")
+    wrapped = {"fetched_at": config.now().isoformat(timespec="seconds"), "url": url, "data": data}
+    partial = path.with_name(path.name + ".part")  # write, then swap in: a reader never sees half a file
+    partial.write_text(json.dumps(wrapped), encoding="utf-8")
+    os.replace(partial, path)
     return wrapped
 
 
 def _fresh(wrapped: dict, week_last_day: date) -> bool:
     """A cached file is good enough if it was fetched today, or the week is over."""
     fetched = datetime.fromisoformat(wrapped["fetched_at"]).date()
-    return fetched >= date.today() or week_last_day < fetched
+    return fetched >= config.today() or week_last_day < fetched
 
 
 # --- stations ---------------------------------------------------------------
@@ -120,7 +123,7 @@ SCHOOLS_RECHECK_H = 1  # a hall missing from a saved list this old: ask Nutrisli
 
 
 def _age_hours(wrapped: dict) -> float:
-    return (datetime.now() - datetime.fromisoformat(wrapped["fetched_at"])).total_seconds() / 3600
+    return (config.now() - datetime.fromisoformat(wrapped["fetched_at"])).total_seconds() / 3600
 
 
 def load_schools(offline: bool = False, recheck: bool = False) -> list[dict]:
@@ -132,7 +135,7 @@ def load_schools(offline: bool = False, recheck: bool = False) -> list[dict]:
         wrapped = _read_cache(path)
         # The list of locations rarely changes, so a week-old copy is fine.
         stale = wrapped is not None and (
-            date.today() - datetime.fromisoformat(wrapped["fetched_at"]).date()).days >= 7
+            config.today() - datetime.fromisoformat(wrapped["fetched_at"]).date()).days >= 7
         stale = stale or (recheck and wrapped is not None and _age_hours(wrapped) >= SCHOOLS_RECHECK_H)
         if (wrapped is None or stale) and not offline:
             try:
@@ -186,14 +189,20 @@ def _schools_of(loc, schools: list[dict]) -> list[dict]:
 # --- menus --------------------------------------------------------------------
 
 def station_cache_path(station: Station, start: date) -> Path:
-    folder = re.sub(r"[^A-Za-z0-9_-]+", "_", station.hall)
-    return config.CACHE_DIR / start.isoformat() / folder / f"{station.menu_type_id}-{station.slug}.json"
+    """One file per Nutrislice station and week, named by the Nutrislice location, so "Roth Cafe" and
+    "Smash n' Shake" share Smash n' Shake's file instead of fetching it twice."""
+    school_id = station.school_id or config.HALLS[station.hall]["school_id"]
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", station.slug)
+    return config.CACHE_DIR / start.isoformat() / f"school-{school_id}" / f"{station.menu_type_id}-{slug}.json"
 
 
 def fetch_station_week(station: Station, day: date, offline: bool = False) -> tuple[dict, str]:
     """Return (raw week JSON, source) where source is 'cache', 'network' or 'stale-cache'."""
     start = week_start(day)
     path = station_cache_path(station, start)
+    wrapped = _read_cache(path)  # a fresh copy needs no lock, so cached reads never wait on the network
+    if wrapped is not None and _fresh(wrapped, start + timedelta(days=6)):
+        return wrapped["data"], "cache"
     with _fetch_lock:  # re-read inside the lock: another visitor may have just fetched it
         wrapped = _read_cache(path)
         if wrapped is not None and _fresh(wrapped, start + timedelta(days=6)):
@@ -249,7 +258,7 @@ if __name__ == "__main__":
         for loc in locations.all_locations(offline=False):
             print(f"{loc.key:40} id {loc.school_id:<6} {loc.kind:8} pays with {loc.paid_with}")
         raise SystemExit(0)
-    today = date.today()
+    today = config.today()
     for hall in sys.argv[1:] or list(config.HALLS):
         result = fetch_hall_day(hall, today)
         n = sum(len(d.get("menu_items", [])) for _, d in result["stations"])

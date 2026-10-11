@@ -62,9 +62,15 @@ def hall_for_school(school: dict) -> str | None:
     return None
 
 
+def _words(text: str) -> str:
+    """Lower-case words separated by single spaces: "Smash n' Shake" -> "smash n shake"."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", text.lower().replace("é", "e").replace("'", "")).split())
+
+
 def is_roth(name: str, slug: str = "") -> bool:
-    text = f"{name} {slug}".lower().replace("é", "e")
-    return any(word in text for word in config.ROTH_WORDS)
+    """Roth itself or one of its concepts, matched as whole words ("Brothers" and "Savory" don't count)."""
+    text = f" {_words(name)} {_words(slug)} "
+    return any(f" {_words(word)} " in text for word in config.ROTH_WORDS)
 
 
 def from_schools(schools: list[dict]) -> list[Location]:

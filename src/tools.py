@@ -14,7 +14,7 @@ import json
 import os
 import re
 from contextvars import ContextVar
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import requests
@@ -79,9 +79,9 @@ _DEFAULT_SESSION.update(_session.get())  # env switches (CLI) become the default
 
 def resolve_date(value: str | None) -> date:
     if not value or str(value).lower() == "today":
-        return date.today()
+        return config.today()
     if str(value).lower() == "tomorrow":
-        return date.today() + timedelta(days=1)
+        return config.today() + timedelta(days=1)
     return date.fromisoformat(str(value)[:10])
 
 
@@ -116,7 +116,8 @@ def load_items(hall: str, day: date) -> tuple[list[dict], dict]:
     else:
         loc = locations.get(hall)
         raw = fetch_hall_day(loc.key, day, offline=offline)
-        items = parse_hall_day(loc.key, raw["stations"], loc.code)
+        all_day = config.RETAIL_DEFAULT_MEALS if loc.kind == locations.RETAIL else None
+        items = parse_hall_day(loc.key, raw["stations"], loc.code, all_day)
         sources = set(raw["sources"].values())
         source = "network" if "network" in sources else ("stale-cache" if "stale-cache" in sources else "cache")
         meta = {"source": source, "errors": raw["errors"]}
@@ -198,8 +199,13 @@ ALLERGY_WORDS = {
 
 
 def read_prefs() -> dict:
+    """Saved memory, repaired so every value is one the app can show and the checker can use
+    (older versions, or a model, may have saved "west", "fri" or "1,800")."""
     prefs = dict(DEFAULT_PREFS)
     prefs.update(storage.current().load_prefs() or {})
+    for key in EDITABLE_PREFS:
+        if key != "notes":
+            prefs[key] = _clean_pref(key, prefs.get(key), strict=False)
     return prefs
 
 
@@ -371,44 +377,153 @@ def get_prefs() -> dict:
 
 
 EDITABLE_PREFS = set(DEFAULT_PREFS)
+LIST_PREFS = {key for key, value in DEFAULT_PREFS.items() if isinstance(value, list)}
+SET_LISTS = {"meals_to_plan", "cheat_days"}  # stated as a whole ("plan lunch and dinner"); other lists grow
 # Names models often use for a memory key, and the key they mean.
 PREF_ALIASES = {"protein_goal_g": "daily_protein_goal_g", "protein_goal": "daily_protein_goal_g",
                 "daily_protein_goal": "daily_protein_goal_g", "calorie_goal": "daily_calorie_goal",
                 "calories_goal": "daily_calorie_goal", "daily_calories": "daily_calorie_goal",
                 "allergy": "allergies", "blacklist": "never_eat", "favorite_foods": "favorites"}
-NUMBER_PREFS = {"daily_protein_goal_g", "daily_calorie_goal", "max_calories_per_meal"}
+NUMBER_PREFS = {"daily_protein_goal_g": 400, "daily_calorie_goal": 8000, "max_calories_per_meal": 4000}  # max
+WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+# Everyday words for an allergy -> the name the app uses (anything else is kept as written).
+ALLERGY_NAMES = {"dairy": "milk", "lactose": "milk", "eggs": "egg", "peanut": "peanuts", "tree nuts": "tree_nuts",
+                 "tree nut": "tree_nuts", "soya": "soy", "shrimp": "shellfish", "sesame seeds": "sesame"}
 
 
-def _clean_pref(key: str, value):
-    """A list key given as text becomes a list ("vegetarian" -> ["vegetarian"]); "110 g" becomes 110."""
-    if isinstance(DEFAULT_PREFS.get(key), list):
-        if isinstance(value, str):
-            return [v.strip() for v in value.split(",") if v.strip()]
-        return [] if value is None else value
-    if key in NUMBER_PREFS and isinstance(value, str):
-        number = re.search(r"\d+(?:\.\d+)?", value)
-        return round(float(number.group())) if number else None
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(",") if v.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [v for v in value if v not in (None, "")]
+    return [value]
+
+
+def _as_number(value, key: str):
+    """"1,800 kcal" -> 1800; 0 or empty -> None (no goal)."""
+    if value in (None, "") or value is False:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        number = float(value)
+    else:
+        text = re.sub(r"(?<=\d),(?=\d{3}\b)", "", str(value))  # thousands separators
+        found = re.search(r"\d+(?:\.\d+)?", text)
+        if not found:
+            raise ValueError(f"{value!r} isn't a number")
+        number = float(found.group())
+    if not 0 <= number <= NUMBER_PREFS[key]:
+        raise ValueError(f"{value!r} is out of range (0 to {NUMBER_PREFS[key]:,})")
+    return round(number) or None
+
+
+def _list_entry(key: str, raw, strict: bool) -> str:
+    """One entry of a list preference, in the form the app and the checker use."""
+    text = " ".join(str(raw).split())
+    low = text.lower()
+    if key == "allergies":
+        return ALLERGY_NAMES.get(low, low)
+    if key == "diet":
+        return low.replace("-", "_").replace(" ", "_")
+    if key == "meals_to_plan":
+        return normalize_meal(low)  # ValueError for "second breakfast"
+    if key == "cheat_days":
+        day = next((d for d in WEEKDAYS if low[:3] == d[:3].lower()), None)
+        if day is None:
+            raise ValueError(f"{text!r} isn't a day of the week")
+        return day
+    if key == "extra_locations" and strict:
+        return normalize_hall(text)
+    return text
+
+
+def _clean_pref(key: str, value, strict: bool = True):
+    """A memory value in the form the app can show and the checker can use.
+
+    strict (saving): raise ValueError for anything unusable. Not strict (reading what's already
+    saved): repair what can be repaired, drop or reset the rest, never raise."""
+    if key in LIST_PREFS:
+        out = []
+        for raw in _as_list(value):
+            try:
+                entry = _list_entry(key, raw, strict)
+            except ValueError:
+                if strict:
+                    raise
+                continue
+            if entry.lower() not in (e.lower() for e in out):
+                out.append(entry)
+        return out
+    try:
+        if key in NUMBER_PREFS:
+            return _as_number(value, key)
+        if key == "treats":
+            level = str(value or "sometimes").strip().lower()
+            if level not in TREAT_LEVELS:
+                raise ValueError(f"treats must be one of {list(TREAT_LEVELS)}")
+            return level
+        if key == "favorite_hall":
+            text = str(value or "").strip()
+            if text.lower() in ("", "none", "no preference", "any", "either"):
+                return None
+            if text.lower() in ("east", "west"):
+                return text.title()
+            return normalize_hall(text) if strict else text
+        if key == "name":
+            return str(value or "").strip()[:60]
+    except ValueError:
+        if strict:
+            raise
+        return DEFAULT_PREFS[key]
     return value
 
 
-def update_prefs(changes: dict, reason: str = "") -> dict:
-    prefs = read_prefs()
+def update_prefs(changes: dict | None = None, reason: str = "", remove: dict | None = None) -> dict:
+    """Save lasting preferences. Lists (allergies, never_eat, favorites, ...) are added to, never
+    replaced, so saving one new allergy can't wipe the others; `remove` takes entries out.
+    meals_to_plan and cheat_days are set as a whole."""
     changes = {PREF_ALIASES.get(k, k): v for k, v in (changes or {}).items()}
-    changes = {k: _clean_pref(k, v) for k, v in changes.items()}
-    unknown = sorted(set(changes) - EDITABLE_PREFS)
+    remove = {PREF_ALIASES.get(k, k): v for k, v in (remove or {}).items()}
+    unknown = sorted((set(changes) | set(remove)) - EDITABLE_PREFS)
     if unknown:
         return {"status": "error", "error": f"Unknown preference keys {unknown}. "
                                             f"Allowed: {sorted(EDITABLE_PREFS)}",
                 "summary": "Rejected unknown preference keys."}
-    prefs.update(changes)
+    prefs, updated, problems = read_prefs(), {}, []
+    for key, value in changes.items():
+        try:
+            new = _clean_pref(key, value)
+        except ValueError as exc:
+            problems.append(f"{key}: {exc}")
+            continue
+        if key in LIST_PREFS and key not in SET_LISTS:
+            new = _clean_pref(key, list(prefs.get(key) or []) + new)  # add, keeping what's there
+        updated[key] = new
+    for key, value in remove.items():
+        if key not in LIST_PREFS:
+            problems.append(f"{key}: only lists can have entries removed")
+            continue
+        try:
+            gone = {g.lower() for g in _clean_pref(key, value, strict=False)}
+        except ValueError as exc:
+            problems.append(f"{key}: {exc}")
+            continue
+        updated[key] = [v for v in updated.get(key, prefs.get(key) or []) if v.lower() not in gone]
+    if problems:
+        return {"status": "error", "error": "Nothing was saved: " + "; ".join(problems),
+                "summary": "Memory not updated: " + "; ".join(problems)}
+    if not updated:
+        return {"status": "error", "error": "Nothing to change.", "summary": "Memory not updated: nothing to change."}
+    prefs.update(updated)
     write_prefs(prefs)
     return {"status": "ok", "prefs": prefs,
-            "summary": f"Memory updated: {', '.join(f'{k}={v}' for k, v in changes.items())}."}
+            "summary": f"Memory updated: {', '.join(f'{k}={v}' for k, v in updated.items())}."}
 
 
 def get_meal_history(days: int = 3) -> dict:
     history = read_history()
-    cutoff = (date.today() - timedelta(days=int(days or 3))).isoformat()
+    cutoff = (config.today() - timedelta(days=int(days or 3))).isoformat()
     recent = [h for h in history if h.get("date", "") >= cutoff]
     slim = [{"date": h["date"], "goal": h.get("goal", ""),
              "meals": {m["meal"]: [i["name"] for i in m["items"]] for m in h["plan"]["meals"]}}
@@ -568,6 +683,42 @@ def compare_halls(meal: str, date: str | None = None, min_protein_g: float | Non
 SCOUT_PER_HALL = 10
 
 
+def _scout_place(h: str, meal: str, day, prefs: dict, per_hall: int) -> dict:
+    """One place's best candidates for one meal (see scout_meal)."""
+    favorites = list(prefs.get("favorites") or [])
+    items, meta = _menu(h, meal, day)
+    if meta["status"] != "ok":
+        return {"status": meta["status"], "fits": 0, "items": [], "error": meta.get("error") or meta.get("note")}
+    codes = allergen_codes(prefs["allergies"])
+    fits = [i for i in items if not _exclusion(i, codes, prefs["diet"], prefs.get("never_eat"), prefs["dislikes"])]
+    known = [i for i in fits if i["calories"] is not None]
+    picks: dict[str, dict] = {}  # lower-cased name -> item; the same dish can sit at two stations
+
+    def add(seq, upto):
+        for item in seq:
+            if len(picks) >= upto:
+                return
+            picks.setdefault(item["name"].strip().lower(), item)
+
+    add([i for i in fits if is_favorite(i, favorites)], 3)
+    add(sorted(known, key=SORTS["protein"]), max(3, per_hall * 6 // 10))
+    add(sorted(known, key=SORTS["protein_per_calorie"]), per_hall)
+    if (prefs.get("treats") or "sometimes") != "never":
+        add([i for i in known if looks_like_treat(i)], len(picks) + 2)
+    # A place that lists no nutrition (common at retail spots) still has real food: show it.
+    add([i for i in fits if i["calories"] is None], per_hall)
+    rows = []
+    for item in picks.values():
+        row = {"id": item["id"], "name": item["name"], "station": item["station"],
+               "serving": item["serving"], "protein_g": item["protein_g"], "calories": item["calories"]}
+        if is_favorite(item, favorites):
+            row["favorite"] = True
+        if looks_like_treat(item):
+            row["treat"] = True
+        rows.append(row)
+    return {"status": "ok" if rows else "no_matches", "fits": len(fits), "items": rows}
+
+
 def _short(text, limit: int = 90) -> str:
     text = " ".join(str(text or "unknown error").split())
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
@@ -583,52 +734,25 @@ def scout_meal(meal: str, date: str | None = None, per_hall: int = SCOUT_PER_HAL
     """
     day, meal = resolve_date(date), normalize_meal(meal)
     prefs = read_prefs()
-    codes = allergen_codes(prefs["allergies"])
-    favorites = list(prefs.get("favorites") or [])
     places = places or considered(prefs)
     halls = {}
     for h in places:
-        items, meta = _menu(h, meal, day)
-        if meta["status"] != "ok":
-            halls[h] = {"status": meta["status"], "fits": 0, "items": [],
-                        "error": meta.get("error") or meta.get("note")}
-            continue
-        fits = [i for i in items
-                if not _exclusion(i, codes, prefs["diet"], prefs.get("never_eat"), prefs["dislikes"])]
-        known = [i for i in fits if i["calories"] is not None]
-        picks: dict[str, dict] = {}  # lower-cased name -> item; the same dish can sit at two stations
-
-        def add(seq, upto):
-            for item in seq:
-                if len(picks) >= upto:
-                    return
-                picks.setdefault(item["name"].strip().lower(), item)
-
-        add([i for i in fits if is_favorite(i, favorites)], 3)
-        add(sorted(known, key=SORTS["protein"]), max(3, per_hall * 6 // 10))
-        add(sorted(known, key=SORTS["protein_per_calorie"]), per_hall)
-        if (prefs.get("treats") or "sometimes") != "never":
-            add([i for i in known if looks_like_treat(i)], len(picks) + 2)
-        rows = []
-        for item in picks.values():
-            row = {"id": item["id"], "name": item["name"], "station": item["station"],
-                   "serving": item["serving"], "protein_g": item["protein_g"], "calories": item["calories"]}
-            if is_favorite(item, favorites):
-                row["favorite"] = True
-            if looks_like_treat(item):
-                row["treat"] = True
-            rows.append(row)
-        halls[h] = {"status": "ok" if fits else "no_matches", "fits": len(fits), "items": rows}
-
+        try:
+            halls[h] = _scout_place(h, meal, day, prefs, per_hall)
+        except Exception as exc:  # one broken place must not hide the others
+            halls[h] = {"status": "error", "fits": 0, "items": [], "error": f"{type(exc).__name__}: {exc}"}
     posted = [h for h in places if halls[h]["status"] != "no_menu_posted" and halls[h]["status"] != "error"]
     status = ("ok" if any(halls[h]["status"] == "ok" for h in places)
               else "no_matches" if posted else "no_menu_posted")
     parts = []
     for h in places:
         info = halls[h]
-        if info["status"] == "ok":
-            best = max(info["items"], key=lambda r: r["protein_g"] or 0)
+        rated = [r for r in info["items"] if r["protein_g"] is not None]
+        if info["status"] == "ok" and rated:
+            best = max(rated, key=lambda r: r["protein_g"])
             parts.append(f"{h} {info['fits']} fit you (top: {best['name']}, {best['protein_g']} g)")
+        elif info["status"] == "ok":
+            parts.append(f"{h} {info['fits']} fit you (no nutrition listed)")
         elif info["status"] == "no_matches":
             parts.append(f"{h} nothing fits your diet/allergies")
         elif info["status"] == "error":
@@ -796,7 +920,7 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
         "adaptations": plan.get("adaptations", []),
         "tips": plan.get("tips", []),
         "cheat_day": is_cheat_day(day, prefs),
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": config.now().isoformat(timespec="seconds"),
     }
     return result, problems
 
@@ -808,12 +932,17 @@ def submit_plan(plan: dict | None = None, **fields) -> dict:
     if problems:
         return {"status": "rejected", "problems": problems,
                 "summary": f"Plan rejected by the checker ({len(problems)} problem(s)): {problems[0]}"}
-    append_history(result)
     t = result["totals"]
     summary = f"Plan accepted: {t['protein_g']} g protein, {t['calories']} kcal"
     if result["protein_gap_g"]:
         summary += f" ({result['protein_gap_g']} g short of the {result['protein_goal_g']} g goal)"
-    return {"status": "accepted", "plan": result, "summary": summary + "."}
+    accepted = {"status": "accepted", "plan": result, "summary": summary + "."}
+    try:
+        append_history(result)
+    except Exception as exc:  # e.g. the account database is paused: the plan is still good
+        accepted["warning"] = f"The plan couldn't be saved to your past plans ({exc})."
+        accepted["summary"] += " " + accepted["warning"]
+    return accepted
 
 
 # --- History (memory of past plans) ------------------------------------------------------

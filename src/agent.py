@@ -21,9 +21,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from contextvars import ContextVar
 from typing import Any, Callable
 
@@ -75,9 +76,15 @@ TOOL_SPECS = [
      _obj({}), T.get_prefs, True),
     ("update_prefs",
      "Save a LASTING preference the user clearly stated (e.g. 'I'm vegan now', 'remember I'm allergic to "
-     "peanuts', 'my protein goal is 140 g'). Not for one-off wishes about today.",
-     _obj({"changes": {"type": "object", "description": "Keys from get_prefs with their new values."},
-           "reason": {"type": "string"}}, ["changes"]),
+     "peanuts', 'my protein goal is 140 g'). Not for one-off wishes about today. Keys: name, diet, allergies, "
+     "daily_protein_goal_g, daily_calorie_goal, max_calories_per_meal, favorite_hall, dislikes, never_eat, "
+     "favorites, treats (never|sometimes|often), cheat_days (weekday names), meals_to_plan, extra_locations, "
+     "notes. List values are ADDED to what's saved (send only the new entries); use `remove` to take entries "
+     "out. meals_to_plan and cheat_days replace the saved list.",
+     _obj({"changes": {"type": "object", "description": "Keys with their new values (lists: entries to add)."},
+           "remove": {"type": "object", "description": "List keys with entries to remove, e.g. "
+                                                       "{\"never_eat\": [\"olives\"]}."},
+           "reason": {"type": "string"}}),
      T.update_prefs, False),
     ("get_meal_history",
      "Recent plans DineWolfie made for this user, so you can add variety instead of repeating meals.",
@@ -155,6 +162,17 @@ def active_specs(fast: bool = False) -> list[tuple]:
 
 
 # --- Run state + events -------------------------------------------------------------------
+
+class EngineError(Exception):
+    """An engine finished with an error result instead of raising (the Claude SDK does this)."""
+
+
+def _busy(text: str) -> bool:
+    """A rate limit or an overloaded service: worth handing over to the built-in planner."""
+    low = text.lower()
+    return any(w in low for w in ("rate limit", "rate_limit", "too many requests", "overloaded")) \
+        or bool(re.search(r"\b(429|529)\b", low))
+
 
 class AIBusy(Exception):
     """The AI service is rate-limited right now (e.g. every Groq model is at its free-tier limit)."""
@@ -280,18 +298,23 @@ def tool_finished(name: str, args: dict, result: dict | None, error: str | None 
         _emit({"type": "final_plan", "plan": result["plan"]})
 
 
-def call_tool(name: str, args: dict) -> tuple[dict, bool]:
-    """Run one tool synchronously and report it. Returns (result, is_error)."""
-    fn = next(spec[3] for spec in TOOL_SPECS if spec[0] == name)
-    tool_started(name, args)
+def run_tool(name: str, fn: Callable, args: dict, auto: bool = False) -> tuple[dict, bool]:
+    """Run one tool or lookup synchronously and report it to the trace. Returns (result, is_error).
+    auto=True marks a lookup the app's code ran by itself (fast mode), not the model."""
+    tool_started(name, args, auto=auto)
     try:
         result = fn(**args)
-    except Exception as exc:  # report the failure to the model so it can adapt
+    except Exception as exc:  # report the failure so the model (or the planner) can adapt
         message = f"{type(exc).__name__}: {exc}"
-        tool_finished(name, args, None, message)
+        tool_finished(name, args, None, message, auto=auto)
         return {"status": "error", "error": message}, True
-    tool_finished(name, args, result)
+    tool_finished(name, args, result, auto=auto)
     return result, False
+
+
+def call_tool(name: str, args: dict) -> tuple[dict, bool]:
+    """Run one of the model's tools by name (the Groq/Gemini/Cerebras loop uses this)."""
+    return run_tool(name, next(spec[3] for spec in TOOL_SPECS if spec[0] == name), args)
 
 
 def _wrap(name: str, description: str, schema: dict, fn: Callable, read_only: bool):
@@ -349,7 +372,8 @@ nutrition data, say "nutrition not listed" and don't guess.
 works, and say so.
 - Only call update_prefs when the user clearly states a lasting preference ("I'm vegan now", "remember I'm \
 allergic to peanuts", "never give me olives again" -> never_eat, "I love the tofu scramble" -> favorites). \
-A one-off wish ("I want pizza today") is not a preference.
+A one-off wish ("I want pizza today") is not a preference. To take something off a list ("I eat olives again"), \
+use update_prefs with remove.
 - A meal is usually 2-4 items. You may use up to 3 servings of an item if that's realistic (two Greek yogurts).
 - If the goal can't be reached, build the closest plan and give one concrete fix in "tips" (for example "add a \
 second Greek yogurt at breakfast").
@@ -388,7 +412,7 @@ totals). If it is rejected, fix the listed problems and submit again. Once it is
 
 
 def system_prompt(plan_date: date, fast: bool = False) -> str:
-    now = datetime.now()
+    now = config.now()
     prefs = T.read_prefs()
     name_line = (f"The user's name is {prefs['name']}; use it once, naturally." if prefs.get("name")
                  else "You don't know the user's name; don't make one up.")
@@ -482,7 +506,7 @@ async def run_agent_async(goal: str, plan_date: date | None = None,
                           resume: str | list | None = None, engine: Engine | None = None) -> AgentRun:
     """Run the agent once. `resume` continues a conversation: a Claude session id, or Groq messages."""
     engine = engine or Engine()
-    plan_date = plan_date or date.today()
+    plan_date = plan_date or config.today()
     run = AgentRun(goal=goal, engine=engine.provider)
     token = _current.set({"run": run, "on_event": on_event})
     start = time.monotonic()
@@ -497,8 +521,11 @@ async def run_agent_async(goal: str, plan_date: date | None = None,
             run_groq(run, goal, plan_date, resume if isinstance(resume, list) else None, engine)
         else:
             await _run_claude(run, goal, plan_date, resume if isinstance(resume, str) else None, engine)
+        if run.plan is None and run.error:  # e.g. "API Error: 429 ..." reported as a result
+            reported, run.error = run.error, None
+            raise EngineError(reported)
     except Exception as exc:
-        busy = isinstance(exc, AIBusy) or "rate limit" in str(exc).lower() or "rate_limit" in str(exc).lower()
+        busy = isinstance(exc, AIBusy) or _busy(str(exc))
         if busy and config.FALLBACK_TO_BUILTIN and run.plan is None:
             # Don't leave the student waiting: plan without AI, and say so.
             why = str(exc) if isinstance(exc, AIBusy) else "The AI service is rate-limiting us right now."
@@ -536,9 +563,9 @@ def _explain_error(exc: Exception) -> str:
     low = text.lower()
     if "invalid x-api-key" in low or "authentication_error" in low or "invalid api key" in low:
         return "That API key was rejected. Check it in the sidebar (no extra spaces) and try again."
-    if "rate limit" in low or "rate_limit" in low:
+    if _busy(text):
         return "The AI service is rate-limiting us. Wait a minute and try again, or switch engines in the sidebar."
-    return f"{type(exc).__name__}: {text}"
+    return text if isinstance(exc, EngineError) else f"{type(exc).__name__}: {text}"
 
 
 def run_agent(goal: str, plan_date: date | None = None, on_event: Callable[[dict], None] | None = None,

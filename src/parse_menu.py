@@ -38,13 +38,13 @@ NUTRIENT_FIELDS = {
 }
 
 
-def meals_for_section(header: str, station_slug: str) -> list[str]:
-    """Which meal(s) a section belongs to, from its header text or the station."""
+def meals_for_section(header: str, station_slug: str, default: list[str] | None = None) -> list[str]:
+    """Which meal(s) a section belongs to, from its header text or the station (else `default`)."""
     text = (header or "").lower()
     for meal, keywords in config.MEAL_KEYWORDS:
         if any(k in text for k in keywords):
             return [meal]
-    return list(config.STATION_DEFAULT_MEALS.get(station_slug, config.DEFAULT_MEALS))
+    return list(config.STATION_DEFAULT_MEALS.get(station_slug, default or config.DEFAULT_MEALS))
 
 
 def _number(value):
@@ -97,7 +97,7 @@ def parse_food(food: dict) -> dict:
 
 
 def parse_station_day(hall: str, station_slug: str, station_name: str, raw_day: dict,
-                      code: str | None = None) -> list[dict]:
+                      code: str | None = None, default_meals: list[str] | None = None) -> list[dict]:
     """Normalize one station's rows for one day. `code` prefixes item ids (default: hall's first letter)."""
     code = code or hall[0]
     items = []
@@ -114,7 +114,7 @@ def parse_station_day(hall: str, station_slug: str, station_name: str, raw_day: 
             "id": f"{code}{food.get('id')}",
             "date": raw_day.get("date"),
             "hall": hall,
-            "meals": meals_for_section(header, station_slug),
+            "meals": meals_for_section(header, station_slug, default_meals),
             "station": station_name,
             "section": header or station_name,
         })
@@ -135,9 +135,10 @@ def merge_duplicates(items: list[dict]) -> list[dict]:
     return list(by_id.values())
 
 
-def parse_hall_day(hall: str, stations_raw: list, code: str | None = None) -> list[dict]:
+def parse_hall_day(hall: str, stations_raw: list, code: str | None = None,
+                   default_meals: list[str] | None = None) -> list[dict]:
     """stations_raw is the "stations" list from fetch_menu.fetch_hall_day()."""
     items = []
     for station, raw_day in stations_raw:
-        items.extend(parse_station_day(hall, station.slug, station.name, raw_day, code))
+        items.extend(parse_station_day(hall, station.slug, station.name, raw_day, code, default_meals))
     return merge_duplicates(items)

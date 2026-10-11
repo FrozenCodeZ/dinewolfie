@@ -21,6 +21,7 @@ and the loop ends the moment the checker accepts the plan.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import threading
@@ -93,16 +94,25 @@ def rank_models(provider: str, ids: list[str]) -> list[str]:
 _discovered: dict[str, tuple[float, list[str]]] = {}
 
 
-def discover(provider: str, client) -> list[str]:
-    """The service's own model list (cached for an hour), so new or renamed models just work."""
-    hit = _discovered.get(provider)
+def _slot(provider: str, model: str = "", key: str | None = None) -> str:
+    """Where per-model state is kept: per service, per API key (by a fingerprint, never the key
+    itself) and per model. One visitor's own key hitting its limit doesn't block the owner's key."""
+    if not key:
+        return f"{provider}:{model}"
+    return f"{provider}#{hashlib.sha256(key.encode()).hexdigest()[:10]}:{model}"
+
+
+def discover(provider: str, client, key: str | None = None) -> list[str]:
+    """The service's own model list for this key (cached for an hour), so new or renamed models just work."""
+    slot = _slot(provider, "", key)
+    hit = _discovered.get(slot)
     if hit and time.monotonic() - hit[0] < 3600:
         return hit[1]
     try:
         ranked = rank_models(provider, [m.id for m in client.models.list()])
     except Exception:
         ranked = []
-    _discovered[provider] = (time.monotonic(), ranked)
+    _discovered[slot] = (time.monotonic(), ranked)
     return ranked
 
 GROQ_NOTE = ("\n\nYou run with tight token limits: use search_items (limit 8) and compare_halls, call one tool "
@@ -113,6 +123,8 @@ KEEP_FULL_ROUNDS = 2          # the last N tool results stay in full; older ones
 MAX_RESULT_CHARS = 6_000
 MAX_BAD_TOOL_RETRIES = 2
 MAX_RATE_WAITS = 6
+MAX_RATE_HITS = 12     # rate-limit answers per plan before handing over to the built-in planner
+MIN_COOLDOWN_S = 2.0   # even if the service says "retry after 0 s", don't ask again at once
 # Gemini 3 signs each tool call it makes ("thought signature", in the call's extra_content) and
 # rejects a conversation whose earlier calls come back unsigned. A signature only fits the model
 # that made it, so calls from another model (after a switch, or old history) get Google's
@@ -124,15 +136,16 @@ SHORT_WAIT_S = 8              # wait this long at most for a model to free up be
 WAIT_BUDGET_S = 20            # total waiting per plan before falling back to the built-in planner
 
 # Free-tier limits are per account *and per model*, and shared by every visitor using the same
-# key. So when a model is at its limit we note until when, and every visitor skips it until then.
-# Keys are "provider:model".
+# key. So when a model is at its limit we note until when, and every visitor using that key skips
+# it until then. Keys come from _slot(): service, key fingerprint, model.
 _cooldown: dict[str, float] = {}   # -> time.monotonic() when it may be tried again
 _unavailable: set[str] = set()     # models the service says don't exist (renamed or retired)
 _no_reasoning: set[str] = set()    # models that refused the reasoning_effort setting
 _models_lock = threading.Lock()
 
 
-def model_chain(primary: str, provider: str = "groq", discovered: list[str] | None = None) -> list[str]:
+def model_chain(primary: str, provider: str = "groq", discovered: list[str] | None = None,
+                key: str | None = None) -> list[str]:
     """The chosen model first (or the service's best when "auto"), then fallbacks, minus missing ones."""
     _, fallbacks = model_settings(provider)
     if primary == AUTO:
@@ -140,28 +153,28 @@ def model_chain(primary: str, provider: str = "groq", discovered: list[str] | No
     else:
         chain = [primary] + [m for m in fallbacks if m != primary]
     with _models_lock:
-        return [m for m in dict.fromkeys(chain) if f"{provider}:{m}" not in _unavailable]
+        return [m for m in dict.fromkeys(chain) if _slot(provider, m, key) not in _unavailable]
 
 
-def next_model(primary: str, now: float, provider: str = "groq",
-               discovered: list[str] | None = None) -> tuple[str | None, float]:
+def next_model(primary: str, now: float, provider: str = "groq", discovered: list[str] | None = None,
+               key: str | None = None) -> tuple[str | None, float]:
     """(first model that isn't cooling down, or None; seconds until the soonest one frees up)."""
-    chain = model_chain(primary, provider, discovered)
+    chain = model_chain(primary, provider, discovered, key)
     if not chain:
         raise RuntimeError(f"None of the {PROVIDERS[provider].label} models DineWolfie tried are available. "
                            "Pick another model in the sidebar.")
     with _models_lock:
         for m in chain:
-            if _cooldown.get(f"{provider}:{m}", 0) <= now:
+            if _cooldown.get(_slot(provider, m, key), 0) <= now:
                 return m, 0.0
-        soonest = min(_cooldown.get(f"{provider}:{m}", now) for m in chain)
+        soonest = min(_cooldown.get(_slot(provider, m, key), now) for m in chain)
         return None, max(0.0, soonest - now)
 
 
-def _cool(model: str, seconds: float, provider: str = "groq") -> None:
+def _cool(model: str, seconds: float, provider: str = "groq", key: str | None = None) -> None:
     with _models_lock:
-        key = f"{provider}:{model}"
-        _cooldown[key] = max(_cooldown.get(key, 0), time.monotonic() + seconds)
+        slot = _slot(provider, model, key)
+        _cooldown[slot] = max(_cooldown.get(slot, 0), time.monotonic() + seconds)
 
 
 def _missing_model(exc) -> bool:
@@ -336,7 +349,8 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
     if client is None:
         client = make_client(provider, engine.api_key)
     primary = engine.model or model_settings(provider)[0]
-    discovered = discover(provider, client) if primary == AUTO else None
+    key = engine.api_key
+    discovered = discover(provider, client, key) if primary == AUTO else None
     fast = engine.fast
     allowed = {spec[0] for spec in lean_specs(fast)}
     tools = tool_schemas(fast)
@@ -351,11 +365,12 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
         messages = [{"role": "system", "content": A.system_prompt(plan_date, fast) + ("" if fast else GROQ_NOTE)},
                     {"role": "user", "content": first}]
 
-    nudged, bad_tool_retries, waits, waited, resign_all = False, 0, 0, 0.0, False
+    nudged, bad_tool_retries, waits, waited, resign_all, rate_hits = False, 0, 0, 0.0, False, 0
     turns, model = 0, primary
-    while turns < config.MAX_TURNS:
+    max_turns = config.FAST_MAX_TURNS if fast else config.MAX_TURNS
+    while turns < max_turns:
         shrink_history(messages)
-        model, free_in = next_model(primary, time.monotonic(), provider, discovered)
+        model, free_in = next_model(primary, time.monotonic(), provider, discovered, key)
         if model is None:  # every model is at its limit
             if config.FALLBACK_TO_BUILTIN and (free_in > SHORT_WAIT_S or waited + free_in > WAIT_BUDGET_S):
                 raise A.AIBusy(f"Every {info.label} model is at its free-tier limit for about {free_in:.0f} more "
@@ -376,17 +391,20 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
         except Exception as exc:
             wait = _retry_after(exc)
             if wait is not None:
-                _cool(model, wait, provider)
+                rate_hits += 1
+                if rate_hits > MAX_RATE_HITS:
+                    raise A.AIBusy(f"{info.label} kept rate-limiting us.") from exc
+                _cool(model, max(wait, MIN_COOLDOWN_S), provider, key)
                 if getattr(exc, "status_code", None) == 413:
                     shrink_history(messages, keep=0)  # request too big for the minute: shrink everything
-                following, _ = next_model(primary, time.monotonic(), provider, discovered)
+                following, _ = next_model(primary, time.monotonic(), provider, discovered, key)
                 if following:
                     A._emit({"type": "wait", "text": f"{model} is at {info.label}'s free-tier limit; switching to "
                                                      f"{following}."})
                 continue
             if _missing_model(exc):
                 with _models_lock:
-                    _unavailable.add(f"{provider}:{model}")
+                    _unavailable.add(_slot(provider, model, key))
                 continue
             if getattr(exc, "status_code", None) == 400 and "reasoning" in str(exc).lower() \
                     and model_options(model, provider):

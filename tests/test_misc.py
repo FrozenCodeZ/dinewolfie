@@ -1,6 +1,6 @@
 """Fetch cache rules, notification text and agent wiring (all offline)."""
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import pytest
 
@@ -13,7 +13,7 @@ ROOTED = Station("West", 2377, "dine-in-vegan-delights", "Rooted")
 
 def _cache(tmp_path, monkeypatch, fetched_at, data):
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path)
-    path = fetch_menu.station_cache_path(ROOTED, week_start(date.today()))
+    path = fetch_menu.station_cache_path(ROOTED, week_start(config.today()))
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"fetched_at": fetched_at.isoformat(), "url": "x", "data": data}))
 
@@ -24,26 +24,26 @@ def test_week_starts_on_sunday():
 
 
 def test_fresh_cache_is_used_without_network(tmp_path, monkeypatch):
-    _cache(tmp_path, monkeypatch, datetime.now(), {"days": []})
+    _cache(tmp_path, monkeypatch, config.now(), {"days": []})
     monkeypatch.setattr(fetch_menu, "_get_json", lambda url: pytest.fail("should not hit the network"))
-    _, source = fetch_station_week(ROOTED, date.today())
+    _, source = fetch_station_week(ROOTED, config.today())
     assert source == "cache"
 
 
 def test_stale_cache_is_used_when_network_fails(tmp_path, monkeypatch):
-    _cache(tmp_path, monkeypatch, datetime.now() - timedelta(days=2), {"days": ["old"]})
+    _cache(tmp_path, monkeypatch, config.now() - timedelta(days=2), {"days": ["old"]})
 
     def boom(url):
         raise FetchError("network down")
     monkeypatch.setattr(fetch_menu, "_get_json", boom)
-    data, source = fetch_station_week(ROOTED, date.today())
+    data, source = fetch_station_week(ROOTED, config.today())
     assert source == "stale-cache" and data == {"days": ["old"]}
 
 
 def test_no_cache_and_no_network_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path)
     with pytest.raises(FetchError):
-        fetch_station_week(ROOTED, date.today(), offline=True)
+        fetch_station_week(ROOTED, config.today(), offline=True)
 
 
 PLAN = {

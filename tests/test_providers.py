@@ -95,7 +95,8 @@ def test_rate_limits_are_tracked_per_service(prefs):
     fake = FakeCompat([limited, _submit()], ["gpt-oss-120b", "llama-4-scout"])
     run, events = _run("cerebras", fake)
     assert [r["model"] for r in fake.requests] == ["gpt-oss-120b", "llama-4-scout"]
-    assert "cerebras:gpt-oss-120b" in G._cooldown and "groq:gpt-oss-120b" not in G._cooldown
+    assert G._slot("cerebras", "gpt-oss-120b", "key-test") in G._cooldown
+    assert not any(k.startswith("groq") for k in G._cooldown)
     assert any("Cerebras's free-tier limit" in e.get("text", "") for e in events)
 
 

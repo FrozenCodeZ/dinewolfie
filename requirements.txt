@@ -9,6 +9,7 @@ pytest==9.1.1
 groq==1.7.0
 # Optional engines: Gemini and Cerebras through their OpenAI-compatible APIs
 openai==3.19.1
+tzdata==2025.2  # time zone data for "today at Stony Brook" (Windows has none built in)
 gspread==6.2.1
 Authlib==1.8.0
 # Hosted site: email + password accounts and per-account memory (optional)

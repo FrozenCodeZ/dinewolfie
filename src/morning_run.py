@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import date, datetime
 
 import config
 from src import notify
@@ -29,7 +28,7 @@ def main() -> int:
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
-    today = date.today().isoformat()
+    today = config.today().isoformat()
     if not args.force and not args.dry_run and SENT_MARKER.exists() \
             and SENT_MARKER.read_text().strip() == today:
         print(f"Already sent today's plan ({today}). Use --force to send again.")
@@ -39,7 +38,7 @@ def main() -> int:
     log_path = LOG_DIR / f"morning-{today}.jsonl"
     with log_path.open("a", encoding="utf-8") as log:
         def on_event(event: dict) -> None:
-            log.write(json.dumps({"at": datetime.now().isoformat(timespec="seconds"), **event},
+            log.write(json.dumps({"at": config.now().isoformat(timespec="seconds"), **event},
                                  default=str) + "\n")
             log.flush()
 

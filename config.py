@@ -5,7 +5,9 @@ Nutrislice ever changes its URLs you only have to edit this.
 See docs/data-notes.md for how these values were confirmed.
 """
 import os
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
@@ -13,6 +15,23 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 
 APP_NAME = "DineWolfie"
+
+# --- Time ------------------------------------------------------------------------
+# "Today" means today at Stony Brook, even on a server that runs in UTC (Streamlit Cloud does, so
+# after 8 PM Eastern its own date is already tomorrow).
+TIMEZONE = os.getenv("DINEWOLFIE_TIMEZONE", "America/New_York").strip() or "America/New_York"
+
+
+def now() -> datetime:
+    """The current time at Stony Brook, as a plain (naive) datetime like the rest of the app uses."""
+    try:
+        return datetime.now(ZoneInfo(TIMEZONE)).replace(tzinfo=None)
+    except (ZoneInfoNotFoundError, ValueError):  # no time zone data on this computer: use its clock
+        return datetime.now()
+
+
+def today() -> date:
+    return now().date()
 
 # --- Nutrislice -------------------------------------------------------------
 # Confirmed 2026-10-03 from the browser's network requests on
@@ -74,6 +93,9 @@ STATION_DEFAULT_MEALS = {
     "dine-in-late-night": ["late_night"],
 }
 DEFAULT_MEALS = ["lunch", "dinner"]
+# Shops and cafes paid with dining dollars (Roth Cafe, Starbucks, ...) usually post one menu for
+# the whole day, so a section that names no meal there counts for every meal.
+RETAIL_DEFAULT_MEALS = ["breakfast", "lunch", "dinner", "late_night"]
 
 # On weekends a hall may serve brunch instead of breakfast + lunch, so a
 # request for breakfast or lunch also accepts brunch items.

@@ -5,7 +5,7 @@ concepts listed as their own locations (as SBU's site describes them), a Starbuc
 a closed location. Every station's week is built from real West grill rows."""
 import json
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -191,7 +191,7 @@ def test_a_hall_with_nothing_posted_is_no_menu_not_an_error(nutrislice, prefs, m
 def test_an_old_location_list_is_rechecked_once_when_a_hall_looks_empty(nutrislice, prefs, monkeypatch):
     prefs()
     closed = {"id": 6334, "name": "West Side Dine-In", "slug": "west-side-dining", "active_menu_types": []}
-    two_hours_ago = (datetime.now() - timedelta(hours=2)).isoformat(timespec="seconds")
+    two_hours_ago = (config.now() - timedelta(hours=2)).isoformat(timespec="seconds")
     old = {"fetched_at": two_hours_ago, "url": config.SCHOOLS_URL, "data": _schools_with(closed)}
     path = config.CACHE_DIR / "schools.json"
     path.parent.mkdir(parents=True, exist_ok=True)

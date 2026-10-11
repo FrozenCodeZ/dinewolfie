@@ -1,4 +1,5 @@
 """Email accounts (Supabase Auth) and per-account memory, against a fake Supabase (no network)."""
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -8,22 +9,25 @@ from src import accounts, storage
 
 
 class FakeAuthError(Exception):
-    def __init__(self, code, message="nope"):
+    def __init__(self, code, message="nope", status=None):
         super().__init__(message)
-        self.code, self.message = code, message
+        self.code, self.message, self.status = code, message, status
 
 
 class FakeSupabase:
     """Just enough of supabase-py's Client. `db` is shared like a real project, and every query
     only sees the signed-in user's row, the way the RLS policies in supabase/schema.sql work."""
 
-    def __init__(self, db=None, users=None, confirm_email=False):
+    def __init__(self, db=None, users=None, confirm_email=False, server=None):
         self.db = db if db is not None else {}
         self.users = users if users is not None else {}  # email -> (user_id, password)
         self.confirm_email, self.current, self.refreshes = confirm_email, None, 0
+        # Supabase's side, shared by every client of the same project (tabs, devices).
+        self.server = server if server is not None else {"issued": 0, "valid": {}, "used": {}, "access": {},
+                                                          "refreshes": 0, "revoked": 0}
         self.auth = SimpleNamespace(sign_in_with_password=self._sign_in, sign_up=self._sign_up,
                                     sign_out=self._sign_out, get_session=self._get_session,
-                                    refresh_session=self._refresh)
+                                    refresh_session=self._refresh, set_session=self._set_session)
 
     def _sign_in(self, creds):
         uid, pw = self.users.get(creds["email"], (None, None))
@@ -42,23 +46,40 @@ class FakeSupabase:
         self.current = uid
         return SimpleNamespace(user=SimpleNamespace(id=uid, email=creds["email"]), session=self._new_session())
 
-    def _sign_out(self):
+    def _sign_out(self, options=None):
+        self.signed_out_scope = (options or {}).get("scope", "global")  # supabase-auth defaults to global
         self.current = None
 
     def _new_session(self):
-        self.tokens_issued = getattr(self, "tokens_issued", 0) + 1
-        token = f"rt-{self.current}-{self.tokens_issued}"
-        self.valid_tokens = getattr(self, "valid_tokens", {})
-        self.valid_tokens[token] = self.current
-        return SimpleNamespace(refresh_token=token)
+        auth = self.server
+        auth["issued"] += 1
+        token, access = f"rt-{self.current}-{auth['issued']}", f"at-{self.current}-{auth['issued']}"
+        auth["valid"][token] = self.current
+        auth["access"][access] = (self.current, int(time.time()) + 3600)
+        return SimpleNamespace(refresh_token=token, access_token=access, expires_at=int(time.time()) + 3600)
 
     def _refresh(self, token):
-        uid = getattr(self, "valid_tokens", {}).pop(token, None)  # each token works once, like Supabase
+        auth = self.server
+        auth["refreshes"] += 1
+        uid = auth["valid"].pop(token, None)  # each token works once, like Supabase
         if uid is None:
-            raise FakeAuthError("refresh_token_not_found", "Invalid Refresh Token")
+            if token in auth["used"]:  # reuse of a spent token: Supabase revokes the whole sign-in
+                auth["valid"] = {t: u for t, u in auth["valid"].items() if u != auth["used"][token]}
+                auth["revoked"] += 1
+            raise FakeAuthError("refresh_token_not_found", "Invalid Refresh Token", status=400)
+        auth["used"][token] = uid
         self.current = uid
         email = next(e for e, (u, _) in self.users.items() if u == uid)
         return SimpleNamespace(user=SimpleNamespace(id=uid, email=email), session=self._new_session())
+
+    def _set_session(self, access, refresh):
+        uid, expires = self.server["access"].get(access, (None, 0))
+        if uid is None or expires <= time.time():
+            return self._refresh(refresh)
+        self.current = uid
+        email = next(e for e, (u, _) in self.users.items() if u == uid)
+        session = SimpleNamespace(refresh_token=refresh, access_token=access, expires_at=expires)
+        return SimpleNamespace(user=SimpleNamespace(id=uid, email=email), session=session)
 
     def _get_session(self):
         self.refreshes += 1
@@ -93,7 +114,7 @@ class FakeQuery:
         if self.row is not None:  # insert/update: RLS "with check"
             if me is None or self.row["user_id"] != me:
                 raise RuntimeError("new row violates row-level security policy")
-            self.client.db[me] = dict(self.row)
+            self.client.db[me] = {"prefs": {}, "history": [], **self.client.db.get(me, {}), **self.row}  # merge
             return SimpleNamespace(data=[self.row])
         wanted = self.filters.get("user_id")
         rows = [r for uid, r in self.client.db.items() if uid == me and (wanted is None or uid == wanted)]
@@ -230,6 +251,7 @@ def test_app_misconfigured_supabase_shows_an_error_not_a_crash(monkeypatch):
 def test_restore_signs_back_in_once_per_token():
     sb = FakeSupabase(users={"wolf@x.edu": ("u-wolf", "password1")})
     first = accounts.sign_in(sb, "wolf@x.edu", "password1")
+    accounts._newest.clear(), accounts._family.clear()  # the server restarted: it only has the cookie
     again = accounts.restore(sb, first.refresh_token)
     assert again.user_id == "u-wolf" and again.email == "wolf@x.edu"
     assert again.refresh_token != first.refresh_token  # rotated, like Supabase does
@@ -254,3 +276,73 @@ def test_app_sign_in_saves_the_stay_signed_in_cookie(monkeypatch):
     next(b for b in at.button if b.label == "Sign in").click().run()
     scripts = [h.proto.body for h in at.get("html")]
     assert any("dinewolfie_session=" in body and "rt-u-wolf-1" in body for body in scripts)
+
+
+# --- several tabs and devices (review findings 10 and 11) ----------------------------------------------
+
+def _expire(*accts):
+    """An hour passes: every access token and every session DineWolfie knows about has expired."""
+    for acct in accts:
+        acct.expires_at = 0
+        if acct.family in accounts._newest:
+            accounts._newest[acct.family] = accounts._newest[acct.family]._replace(expires_at=0)
+
+
+def _expire_server(server):
+    server["access"] = {k: (u, 0) for k, (u, _) in server["access"].items()}
+
+
+def _two_tabs():
+    users = {"wolf@x.edu": ("u-wolf", "password1")}
+    tab_a = FakeSupabase(users=users)
+    tab_b = FakeSupabase(users=users, server=tab_a.server, db=tab_a.db)
+    return tab_a, tab_b
+
+
+def test_a_new_tab_shares_the_sign_in_instead_of_spending_the_token():
+    tab_a, tab_b = _two_tabs()
+    a = accounts.sign_in(tab_a, "wolf@x.edu", "password1")
+    b = accounts.restore(tab_b, a.refresh_token)  # tab B reads the cookie tab A saved
+    assert b.user_id == "u-wolf" and tab_a.server["refreshes"] == 0  # nothing rotated, nothing to reuse
+    assert b.refresh_token == a.refresh_token
+
+
+def test_expired_tabs_refresh_with_the_newest_token_so_supabase_never_sees_a_reuse():
+    tab_a, tab_b = _two_tabs()
+    a = accounts.sign_in(tab_a, "wolf@x.edu", "password1")
+    b = accounts.restore(tab_b, a.refresh_token)
+    _expire(a, b)  # an hour later
+    _expire_server(tab_a.server)
+    assert accounts.ensure_fresh(tab_b, b) is True  # B renews: the token rotates once
+    assert accounts.ensure_fresh(tab_a, a) is True  # A takes B's new sign-in instead of reusing its old token
+    assert a.refresh_token == b.refresh_token and tab_a.server["revoked"] == 0
+    store = storage.SupabaseStore(tab_a, "u-wolf", account=a)
+    store.save_prefs({"diet": ["vegan"]})  # and A can still save
+    assert tab_a.db["u-wolf"]["prefs"] == {"diet": ["vegan"]}
+
+
+def test_two_devices_keep_separate_sign_ins():
+    phone, laptop = _two_tabs()
+    p = accounts.sign_in(phone, "wolf@x.edu", "password1")
+    lap = accounts.sign_in(laptop, "wolf@x.edu", "password1")
+    _expire(lap)
+    _expire_server(laptop.server)
+    accounts.ensure_fresh(laptop, lap)
+    assert lap.refresh_token != p.refresh_token  # the laptop didn't take over the phone's sign-in
+    accounts.sign_out(laptop, lap)
+    assert laptop.signed_out_scope == "local"  # finding 11: only this browser signs out
+    assert phone.server["valid"].get(p.refresh_token) == "u-wolf"
+
+
+def test_restore_tells_an_expired_sign_in_from_a_network_problem(monkeypatch):
+    sb = FakeSupabase(users={"wolf@x.edu": ("u-wolf", "password1")})
+    with pytest.raises(accounts.AccountError) as gone:
+        accounts.restore(sb, "rt-never-issued")
+    assert gone.value.expired  # the app forgets the cookie
+
+    def offline(token):
+        raise ConnectionError("timed out")
+    sb.auth.refresh_session = offline
+    with pytest.raises(accounts.AccountError) as blip:
+        accounts.restore(sb, "rt-whatever")
+    assert not blip.value.expired  # the app keeps the cookie and tries again later
