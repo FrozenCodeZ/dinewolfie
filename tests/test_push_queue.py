@@ -42,6 +42,8 @@ def ntfy(monkeypatch):
     sent = {"post": [], "delete": []}
 
     class Reply:
+        status_code = 200
+
         def __init__(self, data=None):
             self._data = data or {}
 

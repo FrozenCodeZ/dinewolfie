@@ -265,15 +265,22 @@ def ensure_fresh(client, account: Account) -> bool:
     return changed
 
 
-def cookie_script(refresh_token: str | None) -> str:
+def cookie_script(refresh_token: str | None, only_if: str | None = None) -> str:
     """JavaScript that saves (or, with None, deletes) the sign-in cookie in this browser.
-    Streamlit can read cookies but not write them, so the page does it."""
+    Streamlit can read cookies but not write them, so the page does it. only_if: delete only while the
+    cookie still holds this token, so a tab whose sign-in ended can't wipe a newer sign-in made in
+    another tab."""
     if refresh_token:
         value, age = json.dumps(refresh_token).replace("<", "\\u003c"), REMEMBER_DAYS * 86400
         return (f"<script>document.cookie = '{COOKIE}=' + encodeURIComponent({value}) + "
                 f"'; path=/; max-age={age}; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');"
                 "</script>")
-    return f"<script>document.cookie = '{COOKIE}=; path=/; max-age=0; SameSite=Lax';</script>"
+    clear = f"document.cookie = '{COOKIE}=; path=/; max-age=0; SameSite=Lax';"
+    if not isinstance(only_if, str) or not only_if:
+        return f"<script>{clear}</script>"
+    mine = json.dumps(only_if).replace("<", "\\u003c")
+    return (f"<script>(function () {{ var m = document.cookie.match(/(?:^|; ){COOKIE}=([^;]*)/); "
+            f"if (m && decodeURIComponent(m[1]) === {mine}) {{ {clear} }} }})();</script>")
 
 
 def sign_out(client, account: Account | None = None) -> bool:

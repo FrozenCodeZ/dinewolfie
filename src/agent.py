@@ -87,8 +87,10 @@ TOOL_SPECS = [
            "reason": {"type": "string"}}),
      T.update_prefs, False),
     ("get_meal_history",
-     "Recent plans DineWolfie made for this user, so you can add variety instead of repeating meals.",
-     _obj({"days": {"type": "integer", "minimum": 1, "maximum": 14}}), T.get_meal_history, True),
+     "Recent plans DineWolfie made for this user (the days before `date`, default today), so you can add "
+     "variety instead of repeating meals.",
+     _obj({"days": {"type": "integer", "minimum": 1, "maximum": 14},
+           "date": {"type": "string", "description": "The plan date, YYYY-MM-DD."}}), T.get_meal_history, True),
     ("get_menu",
      "Every item one hall serves at one meal on a date, grouped by station, with nutrition per serving. "
      "status is 'ok', 'no_menu_posted' or 'error' - always check it.",
@@ -611,7 +613,8 @@ def plan_reply(plan: dict) -> str:
 def default_goal(prefs: dict | None = None) -> str:
     """The goal used by the morning run, built from saved preferences."""
     prefs = prefs or T.read_prefs()
-    bits = ["Plan my breakfast, lunch and dinner"]
+    meals = [m.replace("_", " ") for m in prefs.get("meals_to_plan") or config.MEALS]
+    bits = ["Plan my " + (", ".join(meals[:-1]) + " and " + meals[-1] if len(meals) > 1 else meals[0])]
     if prefs.get("diet"):
         bits.append(f"I'm {' and '.join(prefs['diet'])}")
     if prefs.get("daily_protein_goal_g"):

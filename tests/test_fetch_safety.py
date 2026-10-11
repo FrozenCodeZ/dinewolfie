@@ -1,5 +1,5 @@
-"""Nutrislice must not be contacted unless live fetching is switched on, and must never be
-contacted again after a refusal or rate limit (no network: requests.get is replaced)."""
+"""Nutrislice must not be contacted unless live fetching is switched on, and not again for a while
+after a refusal or rate limit (no network: requests.get is replaced)."""
 
 import pytest
 

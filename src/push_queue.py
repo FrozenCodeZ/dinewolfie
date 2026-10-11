@@ -62,7 +62,8 @@ def delivery_times(at: time, now: datetime | None = None, days: int = DAYS) -> l
 def menus_posted(day: date) -> bool:
     """Whether any place has a menu that day (Nutrislice posts each week's menus a few days ahead)."""
     for meal in T.read_prefs().get("meals_to_plan") or config.MEALS:
-        if any(h.get("status") == "ok" for h in T.scout_meal(meal, day.isoformat())["halls"].values()):
+        halls = T.scout_meal(meal, day.isoformat())["halls"].values()
+        if any(h.get("status") in ("ok", "no_matches") for h in halls):  # posted, even if nothing fits
             return True
     return False
 
@@ -83,9 +84,13 @@ def queue_days(at: time, topic: str | None, engine, goal: str | None = None, on_
         if not menus_posted(day):
             out.append(Queued(day, when, skipped="the menus aren't posted yet"))
             continue
-        run = run_agent(goal, plan_date=day, engine=engine)
+        with T.plan_date_locked(day):  # a plan for another day is rejected and fixed by the AI
+            run = run_agent(goal, plan_date=day, engine=engine)
         if not run.plan:
             out.append(Queued(day, when, skipped=run.error or "no plan fit that day's menus"))
+            continue
+        if run.plan.get("date") != day.isoformat():  # never send it under another day's id
+            out.append(Queued(day, when, skipped=f"the planner made a plan for another day ({run.plan.get('date')})"))
             continue
         try:
             stored = notify.send_plan(run.plan, topic=topic, at=when, note=note)
@@ -98,8 +103,16 @@ def queue_days(at: time, topic: str | None, engine, goal: str | None = None, on_
 
 
 def cancel_days(topic: str | None, now: datetime | None = None, days: int = DAYS) -> None:
-    """Delete any queued push from today through the last day a queue could reach."""
+    """Delete any queued push from today through the last day a queue could reach. Every day is tried,
+    even if one fails; then the failures are reported."""
     topic = notify.check_topic(topic or config.NTFY_TOPIC)
     today = (now or local_now()).date()
+    failed = []
     for ahead in range(days + 1):
-        notify.cancel_queued(today + timedelta(days=ahead), topic)
+        day = today + timedelta(days=ahead)
+        try:
+            notify.cancel_queued(day, topic)
+        except Exception as exc:  # a network blip on one day mustn't leave the later days queued
+            failed.append(f"{day:%a} ({exc})")
+    if failed:
+        raise RuntimeError("Couldn't cancel " + ", ".join(failed) + ". Try again.")

@@ -14,6 +14,7 @@ A ContextVar keeps visitors apart: each Streamlit session runs in its own thread
 from __future__ import annotations
 
 import json
+import time
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ from pathlib import Path
 import config
 
 HISTORY_LIMIT = 60
+_clock = time.monotonic
 SHEET_CELL_LIMIT = 45_000  # Google Sheets allows 50,000 characters per cell; keep a margin
 SHEET_HEADER = ["user_id", "name", "prefs_json", "history_json", "updated_at"]
 
@@ -129,17 +131,30 @@ class SupabaseStore:
     """One row per account in public.dinewolfie_memory (see supabase/schema.sql).
 
     `client` is that person's signed-in Supabase client, so Row Level Security only ever lets it
-    touch their own row. The row is read once and cached; a save writes only the part that changed
-    (preferences, or past plans), so a small change doesn't resend every saved plan.
+    touch their own row. The row is cached and read again after REFRESH_S seconds, and always just
+    before a change is saved (refresh(force=True)), so another tab or device's change isn't overwritten
+    (a new allergy saved on the phone stays). A save writes only the part that changed (preferences,
+    or past plans), so a small change doesn't resend every saved plan.
     """
     kind = "supabase"
     TABLE = "dinewolfie_memory"
+    REFRESH_S = 10
 
     def __init__(self, client, user_id: str, account=None):
         self.client, self.user_id, self.account = client, str(user_id), account
         self._prefs: dict | None = None
         self._history: list[dict] = []
+        self._loaded_at = 0.0
         self._load()
+
+    def refresh(self, force: bool = False) -> None:
+        """Read the row again if the copy is old (or always, before a read-modify-write)."""
+        if force or _clock() - self._loaded_at >= self.REFRESH_S:
+            try:
+                self._load()
+            except Exception:  # offline or paused: keep working from the copy, try again next time
+                if force:
+                    raise
 
     def _fresh(self):
         """The table, after making sure the sign-in is still valid (access tokens last an hour)."""
@@ -155,6 +170,7 @@ class SupabaseStore:
         if rows:
             self._prefs = rows[0].get("prefs") or None
             self._history = rows[0].get("history") or []
+        self._loaded_at = _clock()
 
     def _write(self, **columns) -> None:
         row = {"user_id": self.user_id, **columns,
@@ -165,6 +181,7 @@ class SupabaseStore:
             raise RuntimeError(f"Couldn't save to your account ({exc}).") from exc
 
     def load_prefs(self) -> dict | None:
+        self.refresh()
         return dict(self._prefs) if self._prefs is not None else None
 
     # The copy in memory is updated first, so this tab keeps working even if the save fails.
@@ -173,6 +190,7 @@ class SupabaseStore:
         self._write(prefs=self._prefs)
 
     def load_history(self) -> list[dict]:
+        self.refresh()
         return list(self._history)
 
     def save_history(self, history: list[dict]) -> None:

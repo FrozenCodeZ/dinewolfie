@@ -17,6 +17,7 @@ def offline_sample(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "LIVE_FETCH", False)          # tests never touch the network
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "menus")  # nor your real menu cache
     locations._memo.clear()
+    locations._seen.clear()               # places seen on Nutrislice are remembered per process
     groq_agent._cooldown.clear()      # rate-limit state is shared per process; start each test clean
     groq_agent._unavailable.clear()
     groq_agent._no_reasoning.clear()

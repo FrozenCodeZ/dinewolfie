@@ -142,7 +142,9 @@ def test_an_allergy_menus_dont_label_is_also_blocked_by_name(prefs):
     res = T.update_prefs({"allergies": "mustard"})
     assert res["status"] == "ok" and "double-check" in res["summary"]
     saved = T.read_prefs()
-    assert saved["allergies"] == ["mustard"] and saved["never_eat"] == ["olives", "mustard"]
+    assert saved["allergies"] == ["mustard"] and saved["never_eat"] == ["olives"]  # the checker finds it by name
+    dish = {"name": "Honey Mustard Chicken", "description": "", "ingredients": "", "allergens": [], "tags": []}
+    assert T.allergy_conflicts(dish, T.allergen_codes(saved["allergies"])) == ["mustard"]
 
 
 def test_only_diets_the_checker_understands_are_saved(prefs):

@@ -31,6 +31,7 @@ from datetime import date
 
 import config
 from src import agent as A
+from src import tools as T
 
 
 @dataclass(frozen=True)
@@ -83,13 +84,17 @@ def _size_b(model_id: str) -> float | None:
 
 
 def lightest_first(provider: str, ids: list[str]) -> list[str]:
-    """Lightest (fastest, cheapest, most free quota) first. Gemini: Flash-Lite before Flash, newest first
-    within each. Others: smallest by the size in the name; models whose name gives no size go last."""
+    """Lightest (fastest, cheapest, most free quota) first. Gemini: the newest Flash-Lite, then Flash
+    (newest first), then older Lites. Others: smallest by the size in the name; no size given goes last."""
     if provider == "gemini":
         def version(model_id):
             match = re.match(r"gemini-(\d+(?:\.\d+)?)", model_id)
             return float(match.group(1)) if match else 0.0
-        return sorted(ids, key=lambda i: ("lite" not in i, -version(i), len(i)))
+        newest = sorted(ids, key=lambda i: (-version(i), len(i)))
+        lites = [i for i in newest if "lite" in i]
+        # The newest Flash-Lite, then Flash models (a step up is a bigger model, not an older Lite),
+        # then older Lites as last fallbacks for rate limits.
+        return lites[:1] + [i for i in newest if "lite" not in i] + lites[1:]
     return sorted(ids, key=lambda i: (_size_b(i) is None, _size_b(i) or 0, i))
 
 
@@ -304,7 +309,7 @@ def _execute(name: str, raw_args: str | None, allowed: set[str]) -> dict:
     if name not in allowed:
         return {"status": "error", "error": f"There is no tool called {name!r} here. Use search_items."}
     if name == "search_items":
-        args["limit"] = min(int(args.get("limit") or SEARCH_LIMIT), SEARCH_LIMIT)
+        args["limit"] = T._int(args.get("limit"), SEARCH_LIMIT, 1, SEARCH_LIMIT)
     result, _ = A.call_tool(name, args)
     return result
 

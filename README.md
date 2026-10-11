@@ -196,7 +196,7 @@ In the terminal, `DINEWOLFIE_ENGINE=groq` with `GROQ_API_KEY` in `.env` runs the
 
 ## Data
 
-Menu data comes from Stony Brook University's Nutrislice menus (`stonybrook.api.nutrislice.com`). SBU Campus Dining gave us permission to fetch them, so **live fetching is on** (`DINEWOLFIE_LIVE_FETCH=on`; set it to `off` to never contact Nutrislice). DineWolfie is polite about it: one request covers a whole week for one station, results are cached on disk, a station is fetched at most once a day, requests are spaced out and identify the project, and if the server refuses or rate-limits any request, all fetching stops at once instead of retrying. Nutrition values are Nutrislice's per-serving numbers. When an item has none, DineWolfie says "nutrition not listed" instead of guessing.
+Menu data comes from Stony Brook University's Nutrislice menus (`stonybrook.api.nutrislice.com`). SBU Campus Dining gave us permission to fetch them, so **live fetching is on** (`DINEWOLFIE_LIVE_FETCH=on`; set it to `off` to never contact Nutrislice). DineWolfie is polite about it: one request covers a whole week for one station, results are cached on disk, a station is fetched at most once a day, requests are spaced out and identify the project, and if the server refuses or rate-limits any request, all fetching stops at once instead of retrying: for as long as Nutrislice asks, at least 15 minutes, or 6 hours if it blocked us. Nutrition values are Nutrislice's per-serving numbers. When an item has none, DineWolfie says "nutrition not listed" instead of guessing.
 
 ## Notes
 

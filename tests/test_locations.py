@@ -131,11 +131,13 @@ def test_a_failed_location_list_is_retried_not_remembered(monkeypatch):
 
 def test_extra_locations_join_searches_and_scouting(nutrislice, prefs):
     prefs(extra_locations=["Roth Cafe", "Somewhere That Closed"])
-    assert T.considered() == ["East", "West", "Roth Cafe"]
+    # a saved place that isn't on Nutrislice today is kept and reported closed, not silently dropped
+    assert T.considered() == ["East", "West", "Roth Cafe", "Somewhere That Closed"]
     search = T.search_items("lunch", date=DAY.isoformat(), limit=40)
     assert "Roth Cafe" in search["hall_status"]
     scout = T.scout_meal("lunch", DAY.isoformat())
-    assert set(scout["halls"]) == {"East", "West", "Roth Cafe"}
+    assert set(scout["halls"]) == {"East", "West", "Roth Cafe", "Somewhere That Closed"}
+    assert scout["halls"]["Somewhere That Closed"]["status"] == "no_menu_posted"
 
 
 def test_sample_mode_says_when_a_place_has_no_saved_menu(prefs, monkeypatch):

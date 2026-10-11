@@ -209,9 +209,10 @@ def supabase_client():
     return st.session_state.sb_client
 
 
-def remember_cookie(token: str | None) -> None:
-    """Save (or with None, delete) the stay-signed-in cookie on the next page render."""
-    st.session_state.cookie_pending = token or ""
+def remember_cookie(token: str | None, only_if: str | None = None) -> None:
+    """Save (or with None, delete) the stay-signed-in cookie on the next page render. only_if: delete
+    it only while it still holds that token (it isn't a newer sign-in from another tab)."""
+    st.session_state.cookie_pending = {"token": token or None, "only_if": only_if}
     st.session_state.cookie_token = token or None
 
 
@@ -232,7 +233,7 @@ if SUPABASE_ENABLED and ACCOUNT is None and not st.session_state.get("restore_tr
             st.session_state.cookie_token = saved
         except accounts.AccountError as exc:
             if exc.expired:
-                remember_cookie(None)  # expired or revoked: forget it
+                remember_cookie(None, only_if=saved)  # expired or revoked: forget it
             else:  # the account service didn't answer: keep the cookie and try again on the next reload
                 st.session_state.store_error = ("Couldn't reach the account service to sign you back in. "
                                                 "Reload the page in a minute.")
@@ -247,7 +248,9 @@ elif ACCOUNT is not None:
         if exc.expired:  # signed out on purpose elsewhere, or revoked
             forget_account()
             ACCOUNT = None
-            remember_cookie(None)
+            mine = st.session_state.get("cookie_token")
+            if mine:  # clear the cookie only if it's still this sign-in's, not a newer one from another tab
+                remember_cookie(None, only_if=mine)
             st.session_state.store_error = "Your sign-in expired. Sign in again to keep saving your memory."
     except Exception:
         pass  # network trouble: try again on the next run
@@ -341,10 +344,14 @@ MEMORY_WHERE = {
     "supabase": "Saved to your account.",
 }[STORE.kind if STORE is not None and STORE.kind != "file" else None]
 
-e = html.escape
+def e(text) -> str:
+    """HTML-escape any value; a plan saved by an older version may hold None where text belongs."""
+    return html.escape("" if text is None else str(text))
 
 if "cookie_pending" in st.session_state:  # write (or clear) the stay-signed-in cookie in this browser
-    st.html(accounts.cookie_script(st.session_state.pop("cookie_pending") or None), unsafe_allow_javascript=True)
+    pending = st.session_state.pop("cookie_pending")
+    pending = pending if isinstance(pending, dict) else {"token": pending or None}  # from an older version
+    st.html(accounts.cookie_script(pending.get("token"), pending.get("only_if")), unsafe_allow_javascript=True)
 
 
 # ---------------------------------------------------------------------------------------
@@ -653,6 +660,10 @@ with st.sidebar:
     st.caption(MEMORY_WHERE + " The agent reads it before every plan, and updates it when you tell it "
                "something lasting, like a new allergy.")
     prefs = T.read_prefs()
+    # What the form showed on the last run: on Save, only what was changed here is applied on top of
+    # what's saved now, so a change made in another tab or on the phone (a new allergy) isn't erased.
+    form_base = st.session_state.get("prefs_form_base") or prefs
+    st.session_state.prefs_form_base = dict(prefs)  # a copy: Save changes `prefs` below
 
     def with_saved(options: list, saved: list) -> list:
         """The usual choices plus anything already saved, so saving the form never drops a value
@@ -698,14 +709,15 @@ with st.sidebar:
             prefs.update({"name": name, "diet": diet, "allergies": allergies,
                           "daily_protein_goal_g": protein or None, "daily_calorie_goal": calories or None,
                           "favorite_hall": None if fav == "No preference" else fav,
-                          "dislikes": [d.strip() for d in dislikes.split(",") if d.strip()],
-                          "never_eat": [d.strip() for d in never_eat.split(",") if d.strip()],
-                          "favorites": [d.strip() for d in favorites.split(",") if d.strip()],
+                          "dislikes": T.split_entries(dislikes, prefs.get("dislikes")),
+                          "never_eat": T.split_entries(never_eat, prefs.get("never_eat")),
+                          "favorites": T.split_entries(favorites, prefs.get("favorites")),
                           "treats": treats, "cheat_days": cheat_days,
                           "meals_to_plan": meals or ["breakfast", "lunch", "dinner"],
                           "extra_locations": extra_places})
             try:
-                T.write_prefs(prefs)
+                T.reread_memory()
+                T.write_prefs(T.merge_form(form_base, prefs, T.read_prefs()))
                 st.toast("Memory saved")
             except Exception as exc:
                 st.error(str(exc))
@@ -756,7 +768,7 @@ EXAMPLES = {
 def remember(key: str, value: str, done: str) -> None:
     """Love it / Never again: add one entry to a memory list (update_prefs adds, never replaces)."""
     try:
-        result = T.update_prefs({key: [value]}, reason="feedback button")
+        result = T.update_prefs({key: [value]}, reason="feedback button", exact=True)  # "Rice, Brown" is one dish
     except Exception as exc:  # e.g. the account database is paused
         result = {"status": "error", "error": str(exc)}
     if result["status"] == "ok":

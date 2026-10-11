@@ -53,8 +53,9 @@ def _run(provider, fake, model=None):
 def test_gemini_ranking_puts_the_lightest_stable_flash_first():
     assert G.rank_models("gemini", GEMINI_IDS) == ["gemini-3.8-flash-lite", "gemini-3.8-flash", "gemini-2.5-flash"]
     older_lite = ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-2.5-flash-lite", "gemini-3.8-flash-lite"]
-    assert G.rank_models("gemini", older_lite) == ["gemini-3.8-flash-lite", "gemini-2.5-flash-lite",
-                                                   "gemini-3.8-flash", "gemini-2.5-flash"]
+    # a step up goes to Flash, not to an older Lite; older Lites are the last fallbacks
+    assert G.rank_models("gemini", older_lite) == ["gemini-3.8-flash-lite", "gemini-3.8-flash", "gemini-2.5-flash",
+                                                   "gemini-2.5-flash-lite"]
 
 
 def test_model_size_is_read_from_the_name():

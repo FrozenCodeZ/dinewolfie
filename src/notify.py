@@ -167,7 +167,8 @@ def cancel_queued(day: date, topic: str | None = None) -> None:
     """Delete a day's queued push before it's delivered (nothing happens if there is none)."""
     topic = check_topic(topic or config.NTFY_TOPIC)
     resp = requests.delete(f"{config.NTFY_SERVER}/{quote(topic)}/{queued_id(day)}", timeout=15)
-    resp.raise_for_status()
+    if resp.status_code != 404:  # 404: nothing was queued for that day
+        resp.raise_for_status()
 
 
 def send_failure(reason: str, topic: str | None = None) -> None:

@@ -24,6 +24,8 @@ import config
 DINE_IN, RETAIL = "dine_in", "retail"
 ROTH_KEY, ROTH_CODE = "Roth Cafe", "LROTH-"
 RETRY_AFTER_FAILURE_S = 120
+# Set by src/tools.py: True while this session uses only saved data (sample menus, "Network down").
+offline_hint = None
 # Words that don't identify a place on their own, so they don't count as "the goal named it".
 _GENERIC = {"the", "east", "west", "side", "dine", "dine-in", "dining", "cafe", "café", "food", "court",
             "market", "marketplace", "kitchen", "grill", "express", "center", "hall", "stony", "brook", "at"}
@@ -50,6 +52,13 @@ class Location:
 
 def builtin() -> list[Location]:
     return [Location(key, h["school_id"], h["slug"], h["name"], key[0], DINE_IN) for key, h in config.HALLS.items()]
+
+
+# Every place seen on Nutrislice since the server started. Over a break Nutrislice drops closed places
+# from its list; a place seen before still resolves, so it's reported closed instead of unknown.
+_seen: dict[str, Location] = {}
+# Roth Cafe is known even if its concepts aren't listed today: it then simply has no menus (closed).
+ROTH_CLOSED = Location(ROTH_KEY, 0, "roth-cafe", ROTH_KEY, ROTH_CODE, RETAIL, (-1,))
 
 
 def hall_for_school(school: dict) -> str | None:
@@ -93,6 +102,8 @@ def from_schools(schools: list[dict]) -> list[Location]:
     if roth and not any(loc.key.lower() == ROTH_KEY.lower() for loc in out):
         out.append(Location(ROTH_KEY, roth[0].school_id, "roth-cafe", " + ".join(r.name for r in roth),
                             ROTH_CODE, RETAIL, tuple(r.school_id for r in roth)))
+    for loc in out:
+        _seen[loc.key.lower()] = loc
     return out
 
 
@@ -105,7 +116,7 @@ def all_locations(offline: bool | None = None) -> list[Location]:
     global last_error
     from src.fetch_menu import FetchError, load_schools  # fetch_menu imports nothing from here
     if offline is None:
-        offline = not config.LIVE_FETCH
+        offline = not config.LIVE_FETCH or bool(offline_hint and offline_hint())
     path = config.CACHE_DIR / "schools.json"
     stamp = (str(path), path.stat().st_mtime if path.exists() else None, offline)
     if _memo.get("stamp") == stamp and (not _memo.get("failed")  # read on almost every tool call
@@ -126,13 +137,18 @@ def get(name: str, locations: list[Location] | None = None) -> Location:
     wanted = (name or "").strip().lower().replace("é", "e")
     if wanted:
         halls = {h.lower() for h in config.HALLS}
-        for test in (lambda k: k == wanted,
-                     lambda k: k in halls and wanted.startswith(k),  # "West Side Dine-In" -> West
-                     lambda k: k.startswith(wanted),
-                     lambda k: wanted in k):
-            hits = [loc for loc in locations if test(loc.key.lower().replace("é", "e"))]
-            if hits:
-                return min(hits, key=lambda loc: len(loc.key))  # "East" beats "East Side Market"
+        listed = {loc.key.lower() for loc in locations}
+        closed = [loc for key, loc in _seen.items() if key not in listed]
+        if ROTH_KEY.lower() not in listed and ROTH_KEY.lower() not in _seen:
+            closed.append(ROTH_CLOSED)
+        for pool in (locations, closed):  # open places first; then known places that are closed today
+            for test in (lambda k: k == wanted,
+                         lambda k: k in halls and wanted.startswith(k),  # "West Side Dine-In" -> West
+                         lambda k: k.startswith(wanted),
+                         lambda k: wanted in k):
+                hits = [loc for loc in pool if test(loc.key.lower().replace("é", "e"))]
+                if hits:
+                    return min(hits, key=lambda loc: len(loc.key))  # "East" beats "East Side Market"
     raise ValueError(f"Unknown location {name!r}. Use one of {[loc.key for loc in locations]}.")
 
 

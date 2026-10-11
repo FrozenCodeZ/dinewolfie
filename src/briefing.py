@@ -41,7 +41,8 @@ def run_lookup(name: str, fn, args: dict) -> dict:
 def gather(plan_date: date, goal: str, per_hall: int = T.SCOUT_PER_HALL) -> str:
     """Run the standard lookups and return the briefing text for the model's first message."""
     prefs = run_lookup("get_prefs", T.get_prefs, {}).get("prefs") or T.read_prefs()
-    recent = run_lookup("get_meal_history", T.get_meal_history, {"days": 3}).get("recent_plans", [])
+    recent = run_lookup("get_meal_history", T.get_meal_history,
+                        {"days": 3, "date": plan_date.isoformat()}).get("recent_plans", [])
     known = locations.all_locations()
     places = T.considered(prefs, [loc.key for loc in locations.named_in(goal, known)])
     scouts = [run_lookup("scout_meal", T.scout_meal, {"meal": meal, "date": plan_date.isoformat(),
