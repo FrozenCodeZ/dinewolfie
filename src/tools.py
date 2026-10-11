@@ -188,14 +188,62 @@ ALLERGY_SYNONYMS = {
     "soy": ["soy"], "soya": ["soy"], "sesame": ["sesame"],
     "fish": ["fish"], "shellfish": ["shellfish"], "shrimp": ["shellfish"],
 }
-# Words to look for in item names/ingredients as a second safety net.
+# Words to look for in item names/ingredients as a second safety net, for dishes the menu doesn't
+# label. Blocking a safe dish by mistake is far better than serving an unsafe one.
+_WHEAT_WORDS = ["wheat", "flour", "bread", "breaded", "pasta", "penne", "spaghetti", "macaroni", "noodle",
+                "couscous", "semolina", "bulgur", "barley", "rye", "seitan", "cracker", "croissant", "bagel",
+                "muffin", "pancake", "waffle", "pizza", "tortilla", "pita", "bun", "crouton", "biscuit", "cake",
+                "cookie", "brownie", "pretzel", "panko", "dumpling", "soy sauce", "teriyaki"]
 ALLERGY_WORDS = {
-    "peanuts": ["peanut"], "tree_nuts": ["almond", "cashew", "walnut", "pecan", "pistachio", "hazelnut"],
-    "milk": ["cheese", "milk", "cream", "butter", "yogurt"], "egg": ["egg"],
-    "fish": ["salmon", "tuna", "cod", "tilapia", "fish"], "shellfish": ["shrimp", "crab", "lobster"],
-    "sesame": ["sesame", "tahini"], "soy": ["tofu", "soy", "edamame"],
-    "gluten": [], "wheat": [],
+    "peanuts": ["peanut", "satay"],
+    "tree_nuts": ["almond", "cashew", "walnut", "pecan", "pistachio", "hazelnut", "macadamia", "pine nut",
+                  "brazil nut", "praline", "marzipan", "pesto", "nutella", "frangipane"],
+    "milk": ["cheese", "milk", "cream", "butter", "yogurt", "whey", "casein", "ghee", "custard", "cheddar",
+             "mozzarella", "parmesan", "ricotta", "feta", "provolone", "alfredo", "queso", "paneer", "gelato",
+             "latte", "ranch", "tzatziki"],
+    "egg": ["egg", "mayo", "mayonnaise", "aioli", "custard", "meringue", "frittata", "quiche", "omelet",
+            "omelette", "french toast"],
+    "fish": ["salmon", "tuna", "cod", "tilapia", "fish", "anchovy", "anchovies", "sardine", "trout", "halibut",
+             "swordfish", "mahi", "pollock", "catfish", "haddock", "flounder", "worcestershire"],
+    "shellfish": ["shrimp", "crab", "lobster", "prawn", "scallop", "clam", "mussel", "oyster", "crawfish",
+                  "crayfish", "calamari", "squid"],
+    "sesame": ["sesame", "tahini", "hummus"],
+    "soy": ["tofu", "soy", "edamame", "miso", "tempeh", "tamari", "teriyaki"],
+    "gluten": _WHEAT_WORDS, "wheat": _WHEAT_WORDS,
 }
+# Allergy words people use, in the order they're looked for -> the name the app saves. "Severe peanut
+# allergy", "I'm allergic to peanuts" and "celiac" all become something the checker enforces.
+ALLERGY_TERMS = [
+    (r"tree[ _-]?nuts?|almonds?|cashews?|walnuts?|pecans?|pistachios?|hazelnuts?|macadamias?|pine nuts?"
+     r"|brazil nuts?", "tree_nuts"),
+    (r"peanuts?|groundnuts?", "peanuts"),
+    (r"nuts?", "nuts"),
+    (r"milk|dairy|lactose|whey|casein", "milk"),
+    (r"eggs?", "egg"),
+    (r"gluten|celiac|coeliac", "gluten"),
+    (r"wheat", "wheat"),
+    (r"soy|soya|soybeans?", "soy"),
+    (r"sesame", "sesame"),
+    (r"shellfish|shrimps?|prawns?|crabs?|lobsters?|scallops?|clams?|mussels?|oysters?|crustaceans?", "shellfish"),
+    (r"fish", "fish"),
+]
+_ALLERGY_FILLER = {"i", "im", "i'm", "am", "have", "has", "a", "an", "my", "to", "of", "and", "severe", "severely",
+                   "mild", "very", "allergy", "allergies", "allergic", "intolerant", "intolerance", "anaphylactic",
+                   "anaphylaxis", "sensitive", "sensitivity", "life", "threatening", "life-threatening", "reaction"}
+
+
+def allergy_names(phrase: str) -> tuple[list[str], str]:
+    """(allergy names the checker knows, any other food left in the phrase). "severe peanut allergy"
+    -> (["peanuts"], ""); "allergic to mustard" -> ([], "mustard")."""
+    text, found = " " + str(phrase).lower().replace("_", " ") + " ", []
+    for pattern, name in ALLERGY_TERMS:
+        regex = re.compile(rf"\b(?:{pattern})\b")
+        if regex.search(text):
+            if name not in found:
+                found.append(name)
+            text = regex.sub(" ", text)  # "tree nuts" isn't also "nuts"
+    words = [w for w in re.findall(r"[a-z][a-z'-]*", text) if w not in _ALLERGY_FILLER]
+    return found, " ".join(words)
 
 
 def read_prefs() -> dict:
@@ -260,7 +308,10 @@ def allergy_conflicts(item: dict, codes: set[str]) -> list[str]:
     """Allergens in an item that the user must avoid (icons first, then keywords)."""
     hits = set(item["allergens"]) & codes
     text = _text(item)
+    gluten_free = "avoiding_gluten" in item.get("tags", [])  # Nutrislice's own "avoiding gluten" label
     for code in codes:
+        if gluten_free and code in ("gluten", "wheat"):
+            continue
         if any(re.search(rf"\b{w}(s|es)?\b", text) for w in ALLERGY_WORDS.get(code, [])):
             hits.add(code)
     return sorted(hits)
@@ -443,8 +494,16 @@ def _list_entry(key: str, raw, strict: bool) -> str:
         text = text[:limit]
     low = text.lower()
     if key == "allergies":
-        low = re.sub(r"^(?:allergic to|allergy to)\s+|\s+(?:allergy|allergies)$", "", low)
-        return ALLERGY_NAMES.get(low, low)
+        found, rest = allergy_names(low)
+        if found:  # a short leftover is another food ("peanut, kiwi allergy"); a long one is just words
+            return found + ([rest] if rest and len(rest.split()) <= 2 else [])
+        if not rest:
+            if strict:
+                raise ValueError(f"couldn't tell which food {text!r} is about")
+            return low
+        if strict and len(rest.split()) > 3:
+            raise ValueError(f"couldn't tell which food {text!r} is about; name just the food")
+        return ALLERGY_NAMES.get(rest, rest)
     if key == "diet":
         name = DIET_NAMES.get(low, low.replace("-", "_").replace(" ", "_"))
         if strict and name not in KNOWN_DIETS:
@@ -482,8 +541,9 @@ def _clean_pref(key: str, value, strict: bool = True):
                 if strict:
                     raise
                 continue
-            if entry.lower() not in (e.lower() for e in out):
-                out.append(entry)
+            for one in entry if isinstance(entry, list) else [entry]:  # "peanut and egg allergy"
+                if one.lower() not in (e.lower() for e in out):
+                    out.append(one)
         if len(out) > MAX_ENTRIES:
             if strict:
                 raise ValueError(f"too many entries (at most {MAX_ENTRIES})")
@@ -851,7 +911,10 @@ def sum_nutrition(items: list[dict], date: str | None = None) -> dict:
     lines, missing_data, unknown = [], [], []
     for entry in items or []:
         item_id = entry.get("id") if isinstance(entry, dict) else entry
-        servings = float(entry.get("servings", 1) or 1) if isinstance(entry, dict) else 1.0
+        servings = _servings(entry.get("servings") if isinstance(entry, dict) else 1)
+        if servings is None:
+            unknown.append(f"{item_id} (servings must be a number)")
+            continue
         item = find_item(item_id, day)
         if not item:
             unknown.append(item_id)
@@ -886,6 +949,16 @@ def _totals(rows: list[dict], day: date) -> dict:
     return sum_nutrition([{"id": i["id"], "servings": i["servings"]} for i in rows], day.isoformat())["totals"]
 
 
+def _servings(value) -> float | None:
+    """1, 2.5 or "2" -> a number (missing -> 1); "two" -> None."""
+    if value in (None, ""):
+        return 1.0
+    try:
+        return float(value) or 1.0
+    except (TypeError, ValueError):
+        return None
+
+
 def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
     """Check a proposed plan against the real menu and the user's constraints."""
     problems = []
@@ -901,8 +974,12 @@ def validate_plan(plan: dict) -> tuple[dict | None, list[str]]:
         """Validate one list of {id, servings, treat} against the menu and the user's hard rules."""
         out = []
         for entry in entries or []:
+            entry = entry if isinstance(entry, dict) else {"id": entry}
             item_id = str(entry.get("id", "")).upper()
-            servings = float(entry.get("servings", 1) or 1)
+            servings = _servings(entry.get("servings"))
+            if servings is None:
+                problems.append(f"{label}: servings for {item_id} must be a number, like 1 or 2.")
+                continue
             item = on_menu.get(item_id)
             if item is None:
                 problems.append(f"{label}: item id {item_id!r} is not on the {hall} {meal} menu for {day}. "

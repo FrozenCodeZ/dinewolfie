@@ -124,13 +124,17 @@ def test_the_agent_cannot_remove_an_allergy(prefs):
 
 
 @pytest.mark.parametrize("said,saved", [("peanuts and shellfish", ["peanuts", "shellfish"]),
-                                        ("nut allergy", ["nut"]), ("eggs & dairy", ["egg", "milk"]),
+                                        ("nut allergy", ["nuts"]), ("eggs & dairy", ["egg", "milk"]),
+                                        ("severe peanut allergy", ["peanuts"]), ("I'm allergic to peanuts", ["peanuts"]),
+                                        ("Peanuts (severe)", ["peanuts"]), ("celiac", ["gluten"]),
+                                        ("lactose intolerant", ["milk"]), ("anaphylactic to shellfish", ["shellfish"]),
+                                        ("tree nuts", ["tree_nuts"]), ("pine nuts", ["tree_nuts"]),
                                         (["allergic to soya"], ["soy"])])
 def test_allergies_are_saved_as_names_the_checker_can_enforce(prefs, said, saved):
     prefs()
     assert T.update_prefs({"allergies": said})["status"] == "ok"
     assert T.read_prefs()["allergies"] == saved
-    assert T.allergen_codes(saved) - {"nut"}  # every saved name maps to codes the menus use
+    assert T.allergen_codes(saved) <= set(config.ALLERGEN_SLUGS.values())  # every one is enforceable
 
 
 def test_an_allergy_menus_dont_label_is_also_blocked_by_name(prefs):
@@ -365,3 +369,35 @@ def test_builtin_planner_picks_at_most_one_treat_per_meal():
     rows.append({"id": "E1", "name": "Egg Whites", "protein_g": 12, "calories": 60})
     picks = planner._pick(rows, 40, None, set(), allow_treat=True)
     assert sum(1 for c in picks if c["_row"].get("treat")) == 1
+
+
+
+# --- found by the first weekly review run --------------------------------------------------------------
+
+def test_allergy_phrases_saved_before_are_repaired_when_read(prefs):
+    prefs(allergies=["severe peanut", "i'm allergic to shellfish", "celiac"])
+    assert T.read_prefs()["allergies"] == ["peanuts", "shellfish", "gluten"]
+
+
+def _dish(name, ingredients="", tags=()):
+    return {"name": name, "description": "", "ingredients": ingredients, "allergens": [], "tags": list(tags)}
+
+
+@pytest.mark.parametrize("dish,codes,expected", [
+    (_dish("Penne Pasta"), {"gluten", "wheat"}, ["gluten", "wheat"]),
+    (_dish("Caesar Dressing", "whey, mayonnaise"), {"milk", "egg"}, ["egg", "milk"]),
+    (_dish("Macadamia Cookie"), {"tree_nuts"}, ["tree_nuts"]),
+    (_dish("Gluten Free Penne", tags=["avoiding_gluten"]), {"gluten", "wheat"}, []),  # labeled safe
+    (_dish("Eggplant Parm"), {"egg"}, []),  # eggplant isn't egg
+])
+def test_unlabeled_allergens_are_caught_by_their_ingredients(dish, codes, expected):
+    assert T.allergy_conflicts(dish, codes) == expected
+
+
+def test_servings_that_are_not_numbers_are_a_fixable_problem_not_a_crash(prefs):
+    prefs()
+    pick = T.scout_meal("dinner", SAMPLE_DATE)["halls"]["East"]["items"][0]
+    result = T.submit_plan({"date": SAMPLE_DATE, "headline": "x", "meals": [
+        {"meal": "dinner", "hall": "East", "items": [{"id": pick["id"], "servings": "two"}], "reason": "r"}]})
+    assert result["status"] == "rejected" and "must be a number" in result["problems"][0]
+    assert T.sum_nutrition([{"id": pick["id"], "servings": "two"}], SAMPLE_DATE)["status"] == "error"
