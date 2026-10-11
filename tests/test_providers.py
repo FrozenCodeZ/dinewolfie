@@ -50,12 +50,23 @@ def _run(provider, fake, model=None):
     return run, events
 
 
-def test_gemini_ranking_prefers_the_newest_stable_flash():
-    assert G.rank_models("gemini", GEMINI_IDS) == ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-2.5-flash"]
+def test_gemini_ranking_puts_the_lightest_stable_flash_first():
+    assert G.rank_models("gemini", GEMINI_IDS) == ["gemini-3.8-flash-lite", "gemini-3.8-flash", "gemini-2.5-flash"]
+    older_lite = ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-2.5-flash-lite", "gemini-3.8-flash-lite"]
+    assert G.rank_models("gemini", older_lite) == ["gemini-3.8-flash-lite", "gemini-2.5-flash-lite",
+                                                   "gemini-3.8-flash", "gemini-2.5-flash"]
 
 
-def test_cerebras_ranking_puts_gpt_oss_first():
-    assert G.rank_models("cerebras", ["llama-4-scout", "gpt-oss-120b", "qwen-3-32b"])[0] == "gpt-oss-120b"
+def test_model_size_is_read_from_the_name():
+    assert G._size_b("llama3.1-8b") == 8 and G._size_b("gpt-oss-120b") == 120
+    assert G._size_b("qwen-3-235b-a22b-instruct-2507") == 235  # total size, not the "a22b" active part
+    assert G._size_b("llama-4-scout-17b-16e-instruct") == 17 and G._size_b("zai-glm-4.7") is None
+
+
+def test_cerebras_ranking_puts_the_smallest_first_and_unknown_sizes_last():
+    ids = ["zai-glm-4.7", "gpt-oss-120b", "llama3.1-8b", "qwen-3-235b-a22b-instruct-2507"]
+    assert G.rank_models("cerebras", ids) == ["llama3.1-8b", "gpt-oss-120b", "qwen-3-235b-a22b-instruct-2507",
+                                              "zai-glm-4.7"]
 
 
 def test_gemini_auto_picks_a_listed_model_and_uses_gemini_settings(prefs):
@@ -63,7 +74,7 @@ def test_gemini_auto_picks_a_listed_model_and_uses_gemini_settings(prefs):
     fake = FakeCompat([_submit()], GEMINI_IDS)
     run, _ = _run("gemini", fake)  # model None -> config.GEMINI_MODEL == "auto"
     sent = fake.requests[0]
-    assert sent["model"] == "gemini-3.8-flash"
+    assert sent["model"] == "gemini-3.8-flash-lite"
     assert sent["max_tokens"] == G.MAX_COMPLETION_TOKENS and "max_completion_tokens" not in sent
     assert sent["reasoning_effort"] == config.GROQ_REASONING_EFFORT
     assert run.plan is not None and run.reply.startswith("Enjoy!")
@@ -74,7 +85,8 @@ def test_gemini_falls_back_to_the_known_list_when_listing_fails(prefs, monkeypat
     fake = FakeCompat([_submit()])
     fake.models = SimpleNamespace(list=lambda: (_ for _ in ()).throw(RuntimeError("no list")))
     _run("gemini", fake)
-    assert fake.requests[0]["model"] == config.GEMINI_MODELS[0]
+    assert fake.requests[0]["model"] == G.lightest_first("gemini", config.GEMINI_MODELS)[0]
+    assert "lite" in fake.requests[0]["model"]
 
 
 def test_cerebras_drops_reasoning_effort_if_the_model_refuses_it(prefs):
@@ -180,3 +192,77 @@ def test_a_rejected_signature_is_retried_once_with_the_placeholder(prefs):
     assert run.plan is not None and len(fake.requests) == 3
     retried = _assistant_calls(fake.requests[2])[0]
     assert retried[0]["extra_content"]["google"]["thought_signature"] == G.PLACEHOLDER_SIGNATURE
+
+
+# --- "auto" starts light and steps up when the light model struggles -----------------------------
+
+LIGHT_AND_FULL = ["models/gemini-3.8-flash-lite", "models/gemini-3.8-flash", "models/gemini-2.5-flash"]
+
+
+def _bad_submit():
+    plan = {"date": SAMPLE_DATE, "headline": "x", "message": "x",
+            "meals": [{"meal": "dinner", "hall": "East", "items": [{"id": "not-on-the-menu"}], "reason": "r"}]}
+    return {"tool_calls": [_tool_call(9, "submit_plan", plan)]}
+
+
+def _refused(text="Request too long for this model's context window"):
+    return type("BadRequest", (Exception,), {"status_code": 400})(text)
+
+
+def test_auto_hands_the_plan_to_a_bigger_model_after_two_rejections(prefs):
+    prefs()
+    fake = FakeCompat([_bad_submit(), _bad_submit(), _submit()], LIGHT_AND_FULL)
+    run, events = _run("gemini", fake)
+    assert [r["model"] for r in fake.requests] == ["gemini-3.8-flash-lite"] * 2 + ["gemini-3.8-flash"]
+    assert run.plan is not None and not run.error
+    assert any("handing the plan to gemini-3.8-flash" in e.get("text", "") for e in events)
+
+
+def test_a_model_the_student_chose_is_never_swapped_for_a_bigger_one(prefs):
+    prefs()
+    fake = FakeCompat([_bad_submit(), _bad_submit(), _submit()], LIGHT_AND_FULL)
+    run, _ = _run("gemini", fake, model="gemini-3.8-flash-lite")
+    assert {r["model"] for r in fake.requests} == {"gemini-3.8-flash-lite"} and run.plan is not None
+
+
+def test_auto_steps_up_when_the_light_model_cant_take_the_request(prefs):
+    prefs()
+    fake = FakeCompat([_refused(), _submit()], LIGHT_AND_FULL)
+    run, _ = _run("gemini", fake)
+    assert [r["model"] for r in fake.requests] == ["gemini-3.8-flash-lite", "gemini-3.8-flash"]
+    assert run.plan is not None
+
+
+def test_a_refused_request_on_a_chosen_model_is_reported_not_retried(prefs):
+    import pytest
+    prefs()
+    fake = FakeCompat([_refused(), _submit()], LIGHT_AND_FULL)
+    with pytest.raises(Exception, match="context window"):
+        _run("gemini", fake, model="gemini-3.8-flash-lite")
+    assert len(fake.requests) == 1
+
+
+def test_auto_steps_up_at_most_twice(prefs):
+    import pytest
+    prefs()
+    ids = LIGHT_AND_FULL + ["models/gemini-2.0-flash"]
+    fake = FakeCompat([_refused(), _refused(), _refused(), _submit()], ids)
+    with pytest.raises(Exception, match="context window"):
+        _run("gemini", fake)
+    assert len(fake.requests) == 3  # the light model, then two steps up, then it gives the error
+
+
+def test_auto_steps_up_when_the_light_model_never_submits_a_plan(prefs):
+    prefs()
+    fake = FakeCompat([{"content": "Sounds good!"}, {"content": "Here you go."}, _submit()], LIGHT_AND_FULL)
+    run, _ = _run("gemini", fake)
+    assert [r["model"] for r in fake.requests] == ["gemini-3.8-flash-lite"] * 2 + ["gemini-3.8-flash"]
+    assert run.plan is not None
+    assert fake.requests[2]["messages"][-1]["content"].startswith("Please finish")
+
+
+def test_the_last_model_in_the_list_keeps_going_without_stepping_up(prefs):
+    prefs()
+    fake = FakeCompat([_bad_submit(), _bad_submit(), _submit()], ["models/gemini-3.8-flash-lite"])
+    run, _ = _run("gemini", fake)
+    assert {r["model"] for r in fake.requests} == {"gemini-3.8-flash-lite"} and run.plan is not None

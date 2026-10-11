@@ -16,7 +16,7 @@ import config
 from src import access, accounts, locations, notify, storage
 from src import tools as T
 from src.agent import MEAL_NAMES, Engine, default_goal, run_agent
-from src.groq_agent import PROVIDERS, model_settings
+from src.groq_agent import PROVIDERS, lightest_first, model_settings
 
 st.set_page_config(page_title="DineWolfie", page_icon="🐺", layout="wide")
 
@@ -612,7 +612,7 @@ with st.sidebar:
             ENGINE_READY = api_key is not None
         if compat:
             default_model, fallbacks = model_settings(provider)
-            model_list = config.GROQ_MODELS if provider == "groq" else ["auto"] + fallbacks
+            model_list = config.GROQ_MODELS if provider == "groq" else ["auto"] + lightest_first(provider, fallbacks)
         else:
             default_model, model_list = config.MODEL, config.CLAUDE_MODELS
         if default_model not in model_list:
@@ -622,9 +622,11 @@ with st.sidebar:
         locked = HOSTED and why == access.APP
         model = st.selectbox("Model", model_list, index=model_list.index(default_model), key=f"model_{provider}",
                              disabled=locked,
-                             format_func=lambda m: "Newest available (auto)" if m == "auto" else m,
+                             format_func=lambda m: "Lightest available (auto)" if m == "auto" else m,
                              help="Listed fastest and cheapest first. Bigger models plan a little better but are "
-                                  "slower and cost more." + (" Paste your own key to choose." if locked else ""))
+                                  "slower and cost more. Auto starts with the service's lightest model and moves "
+                                  "up to a bigger one only if the light one struggles."
+                                  + (" Paste your own key to choose." if locked else ""))
         if locked:
             model = default_model
         # Thorough uses about four times the tokens, so on the owner's key it's Fast only too.

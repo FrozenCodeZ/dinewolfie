@@ -53,7 +53,7 @@ PROVIDERS = {
     "cerebras": Provider("cerebras", "Cerebras", "CEREBRAS_API_KEY", "https://api.cerebras.ai/v1",
                          "max_completion_tokens", "https://cloud.cerebras.ai", 10),
 }
-AUTO = "auto"  # "ask the service which models it has and pick the best one"
+AUTO = "auto"  # "ask the service which models it has and start with the lightest one"
 
 
 def model_settings(provider: str) -> tuple[str, list[str]]:
@@ -76,19 +76,30 @@ def make_client(provider: str, api_key: str):
 _SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "vision", "guard", "whisper", "native")
 
 
-def rank_models(provider: str, ids: list[str]) -> list[str]:
-    """Chat models worth trying, best first. Gemini: newest stable Flash first, then Flash-Lite."""
-    ids = [i.removeprefix("models/") for i in ids if not any(w in i.lower() for w in _SKIP_WORDS)]
-    if provider == "gemini":
-        flash = [i for i in ids if i.startswith("gemini-") and "flash" in i]
-        stable = [i for i in flash if "preview" not in i and "exp" not in i] or flash
+def _size_b(model_id: str) -> float | None:
+    """Size in billions of parameters, when the name says: "llama3.1-8b" -> 8, "qwen-3-235b-a22b" -> 235."""
+    match = re.search(r"(?<![a-z\d.])(\d+(?:\.\d+)?)b(?![a-z])", model_id.lower())
+    return float(match.group(1)) if match else None
 
+
+def lightest_first(provider: str, ids: list[str]) -> list[str]:
+    """Lightest (fastest, cheapest, most free quota) first. Gemini: Flash-Lite before Flash, newest first
+    within each. Others: smallest by the size in the name; models whose name gives no size go last."""
+    if provider == "gemini":
         def version(model_id):
             match = re.match(r"gemini-(\d+(?:\.\d+)?)", model_id)
             return float(match.group(1)) if match else 0.0
-        return sorted(stable, key=lambda i: (-version(i), "lite" in i, len(i)))
-    preferred = [m for m in ("gpt-oss-120b", "openai/gpt-oss-120b") if m in ids]
-    return preferred + sorted(i for i in ids if i not in preferred)
+        return sorted(ids, key=lambda i: ("lite" not in i, -version(i), len(i)))
+    return sorted(ids, key=lambda i: (_size_b(i) is None, _size_b(i) or 0, i))
+
+
+def rank_models(provider: str, ids: list[str]) -> list[str]:
+    """Chat models worth trying, lightest first. Gemini: its stable Flash and Flash-Lite models only."""
+    ids = [i.removeprefix("models/") for i in ids if not any(w in i.lower() for w in _SKIP_WORDS)]
+    if provider == "gemini":
+        flash = [i for i in ids if i.startswith("gemini-") and "flash" in i]
+        ids = [i for i in flash if "preview" not in i and "exp" not in i] or flash
+    return lightest_first(provider, ids)
 
 
 _discovered: dict[str, tuple[float, list[str]]] = {}
@@ -124,6 +135,10 @@ MAX_RESULT_CHARS = 6_000
 MAX_BAD_TOOL_RETRIES = 2
 MAX_RATE_WAITS = 6
 MAX_RATE_HITS = 12     # rate-limit answers per plan before handing over to the built-in planner
+# "auto" starts with the lightest model and steps up to the next one in the list when it struggles:
+# the checker rejected its plan this many times, or it sent a request the service refused.
+STEP_UP_AFTER_REJECTIONS = 2
+MAX_STEP_UPS = 2
 MIN_COOLDOWN_S = 2.0   # even if the service says "retry after 0 s", don't ask again at once
 # Gemini 3 signs each tool call it makes ("thought signature", in the call's extra_content) and
 # rejects a conversation whose earlier calls come back unsigned. A signature only fits the model
@@ -145,21 +160,22 @@ _models_lock = threading.Lock()
 
 
 def model_chain(primary: str, provider: str = "groq", discovered: list[str] | None = None,
-                key: str | None = None) -> list[str]:
-    """The chosen model first (or the service's best when "auto"), then fallbacks, minus missing ones."""
+                key: str | None = None, skip: set[str] | frozenset = frozenset()) -> list[str]:
+    """The chosen model first (or the service's lightest when "auto"), then fallbacks, minus missing
+    ones and the ones in `skip` (models this plan stepped up from)."""
     _, fallbacks = model_settings(provider)
     if primary == AUTO:
-        chain = list(discovered or []) or fallbacks
+        chain = list(discovered or []) or lightest_first(provider, fallbacks)
     else:
         chain = [primary] + [m for m in fallbacks if m != primary]
     with _models_lock:
-        return [m for m in dict.fromkeys(chain) if _slot(provider, m, key) not in _unavailable]
+        return [m for m in dict.fromkeys(chain) if _slot(provider, m, key) not in _unavailable and m not in skip]
 
 
 def next_model(primary: str, now: float, provider: str = "groq", discovered: list[str] | None = None,
-               key: str | None = None) -> tuple[str | None, float]:
+               key: str | None = None, skip: set[str] | frozenset = frozenset()) -> tuple[str | None, float]:
     """(first model that isn't cooling down, or None; seconds until the soonest one frees up)."""
-    chain = model_chain(primary, provider, discovered, key)
+    chain = model_chain(primary, provider, discovered, key, skip)
     if not chain:
         raise RuntimeError(f"None of the {PROVIDERS[provider].label} models DineWolfie tried are available. "
                            "Pick another model in the sidebar.")
@@ -367,10 +383,26 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
 
     nudged, bad_tool_retries, waits, waited, resign_all, rate_hits = False, 0, 0, 0.0, False, 0
     turns, model = 0, primary
+    stepped_from: set[str] = set()   # "auto" only: models this plan stepped up from
+    rejected: dict[str, int] = {}    # checker rejections per model
+    step_ups = 0
+
+    def step_up(why: str) -> bool:
+        """Auto only: hand the rest of this plan to the next model up the list. False if there's none."""
+        nonlocal step_ups
+        chain = model_chain(primary, provider, discovered, key, stepped_from)
+        if primary != AUTO or step_ups >= MAX_STEP_UPS or model not in chain or model == chain[-1]:
+            return False
+        stepped_from.update(chain[:chain.index(model) + 1])  # this model and anything lighter
+        step_ups += 1
+        following, _ = next_model(primary, time.monotonic(), provider, discovered, key, stepped_from)
+        A._emit({"type": "wait", "text": f"{model} {why}; handing the plan to {following or 'the next model up'}."})
+        return True
+
     max_turns = config.FAST_MAX_TURNS if fast else config.MAX_TURNS
     while turns < max_turns:
         shrink_history(messages)
-        model, free_in = next_model(primary, time.monotonic(), provider, discovered, key)
+        model, free_in = next_model(primary, time.monotonic(), provider, discovered, key, stepped_from)
         if model is None:  # every model is at its limit
             if config.FALLBACK_TO_BUILTIN and (free_in > SHORT_WAIT_S or waited + free_in > WAIT_BUDGET_S):
                 raise A.AIBusy(f"Every {info.label} model is at its free-tier limit for about {free_in:.0f} more "
@@ -397,7 +429,7 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
                 _cool(model, max(wait, MIN_COOLDOWN_S), provider, key)
                 if getattr(exc, "status_code", None) == 413:
                     shrink_history(messages, keep=0)  # request too big for the minute: shrink everything
-                following, _ = next_model(primary, time.monotonic(), provider, discovered, key)
+                following, _ = next_model(primary, time.monotonic(), provider, discovered, key, stepped_from)
                 if following:
                     A._emit({"type": "wait", "text": f"{model} is at {info.label}'s free-tier limit; switching to "
                                                      f"{following}."})
@@ -418,6 +450,10 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
             if "tool_use_failed" in str(exc) and bad_tool_retries < MAX_BAD_TOOL_RETRIES:
                 bad_tool_retries += 1
                 continue
+            # A light model's request refused (its context is too small, a malformed call): a bigger one may manage.
+            if getattr(exc, "status_code", None) in (400, 422) and step_up("couldn't handle the request"):
+                bad_tool_retries = 0
+                continue
             raise
         turns += 1
         run.num_turns += 1
@@ -432,7 +468,8 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
             A._emit({"type": "thinking", "text": reasoning[:600]})
 
         if not msg.tool_calls:
-            if run.plan is None and not nudged:  # one reminder to finish properly
+            # One reminder to finish properly; on "auto", a model that still doesn't hands over to a bigger one.
+            if run.plan is None and (not nudged or (not history and step_up("didn't submit a plan"))):
                 nudged = True
                 messages.append({"role": "user", "content": "Please finish: call submit_plan with the plan, "
                                                             "then give me the short summary."})
@@ -445,6 +482,10 @@ def run_groq(run, goal: str, plan_date: date, history: list[dict] | None, engine
             result = _execute(tc.function.name, tc.function.arguments, allowed)
             messages.append({"role": "tool", "tool_call_id": tc.id,
                              "content": _result_text(tc.function.name, result)})
+            if tc.function.name == "submit_plan" and result.get("status") == "rejected":
+                rejected[model] = rejected.get(model, 0) + 1
+        if run.plan is None and rejected.get(model, 0) >= STEP_UP_AFTER_REJECTIONS:
+            step_up(f"had {rejected[model]} plans rejected by the checker")
         if fast and run.plan is not None:
             # Accepted: no extra request for a summary. Close the turn so follow-ups stay well-formed.
             run.reply = A.plan_reply(run.plan)

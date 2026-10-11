@@ -35,7 +35,7 @@ Steps 3 and 4 still work if you already set them up, but you don't need them.
 - **Cerebras (optional, free tier):** https://cloud.cerebras.ai → API Keys.
 - **Tavily (optional, free tier):** https://app.tavily.com → API key (starts with `tvly-`).
 
-Gemini and Cerebras pick their model automatically ("Newest available"): the app asks the service which models it has, so renamed models keep working. Visitors can also paste their own key for any engine.
+Gemini and Cerebras pick their model automatically ("Lightest available"): the app asks the service which models it has and starts with the lightest (Gemini's Flash-Lite, or the smallest Cerebras model), which is the fastest and has the most free quota. If that model's plan is rejected by the checker twice, or it can't handle the request, the plan moves up to the next bigger model. Renamed models keep working. Visitors can also paste their own key for any engine.
 
 In Streamlit Cloud: your app → **⋮ → Settings → Secrets**, and paste:
 

@@ -162,8 +162,9 @@ GROQ_FALLBACK_MODELS = [m.strip() for m in os.getenv(
 # making the student wait. The plan is labeled so it's clear the AI didn't make it.
 FALLBACK_TO_BUILTIN = os.getenv("DINEWOLFIE_FALLBACK_BUILTIN", "on").strip().lower() in ("on", "1", "true", "yes")
 # Gemini and Cerebras (both optional, OpenAI-compatible). "auto" asks the service for its model list
-# and picks the newest suitable one, so renamed models keep working. The lists are used when the
-# service can't be asked, and as fallbacks; models it doesn't have are skipped.
+# and starts with the lightest one (fastest, cheapest, most free quota; Gemini's Flash-Lite), moving
+# up to a bigger model only if the light one struggles. Renamed models keep working. The lists are
+# used when the service can't be asked, and as fallbacks; models it doesn't have are skipped.
 GEMINI_MODEL = os.getenv("DINEWOLFIE_GEMINI_MODEL", "auto").strip() or "auto"
 GEMINI_MODELS = [m.strip() for m in os.getenv(
     "DINEWOLFIE_GEMINI_FALLBACKS", "gemini-3.8-flash,gemini-2.5-flash,gemini-2.5-flash-lite").split(",") if m.strip()]
