@@ -31,6 +31,7 @@ def now() -> datetime:
 
 
 def today() -> date:
+    """Return today's date in the configured time zone."""
     return now().date()
 
 # --- Nutrislice -------------------------------------------------------------
